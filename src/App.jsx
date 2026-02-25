@@ -881,50 +881,60 @@ function useSupabaseStrategies() {
 }
 
 // ============================================================
-// ✅ SUPABASE ACTIVITY LOG HOOK
+// ✅ SUPABASE ACTIVITY LOG HOOK — düzəldilmiş
 // ============================================================
 function useSupabaseActivityLog() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setFetchError("");
+    const { data, error } = await supabase
+      .from("activity_log")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(300);
+    if (error) {
+      setFetchError(error.message);
+    } else if (data) {
+      setLogs(data);
+    }
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    const load = async () => {
-      const { data, error } = await supabase
-        .from("activity_log")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(200);
-      if (!error && data) setLogs(data);
-      setLoading(false);
-    };
     load();
-
     const ch = supabase
       .channel("activity-log-sync")
       .on("postgres_changes",
         { event: "INSERT", schema: "public", table: "activity_log" },
         (payload) => {
-          setLogs(prev => [payload.new, ...prev]);
+          setLogs(prev => {
+            if (prev.find(l => l.id === payload.new.id)) return prev;
+            return [payload.new, ...prev];
+          });
         }
       )
       .subscribe();
-
     return () => supabase.removeChannel(ch);
-  }, []);
+  }, [load]);
 
   const addLog = useCallback(async ({ userId, userName, userRole, action, target, detail, category }) => {
-    await supabase.from("activity_log").insert([{
-      user_id:   userId,
-      user_name: userName,
-      user_role: userRole,
-      action,
-      target:    target  || "",
-      detail:    detail  || "",
-      category:  category|| "general",
+    const { error } = await supabase.from("activity_log").insert([{
+      user_id:   String(userId  || ""),
+      user_name: String(userName || ""),
+      user_role: String(userRole || "viewer"),
+      action:    String(action  || ""),
+      target:    String(target  || ""),
+      detail:    String(detail  || ""),
+      category:  String(category|| "general"),
     }]);
+    if (error) console.error("addLog xətası:", error.message);
   }, []);
 
-  return { logs, loading, addLog };
+  return { logs, loading, fetchError, addLog, reload: load };
 }
 
 // ============================================================
@@ -1111,7 +1121,7 @@ export default function App() {
   const { alerts, setAlerts } = useSupabaseAlerts();
   const { dataEntries, setDataEntries } = useSupabaseDataEntries();
   const { strategies, setStrategies } = useSupabaseStrategies();
-  const { logs, loading: logsLoading, addLog } = useSupabaseActivityLog();
+  const { logs, loading: logsLoading, fetchError: logError, addLog, reload: reloadLogs } = useSupabaseActivityLog();
 
   const rawSensors = useSensors();
   const sensors = Object.fromEntries(NODES.map(n => [n.id, { ...rawSensors[n.id], ...(sensorOverrides[n.id]||{}) }]));
@@ -1645,127 +1655,137 @@ export default function App() {
               <PermissionBanner message="Bu bölməyə yalnız Administrator daxil ola bilər."/>
             ) : (
               <div>
-                {/* Başlıq + statistika */}
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12,marginBottom:18}}>
+                {/* Xəta varsa göstər */}
+                {logError && (
+                  <div style={{background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:10,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+                    <div>
+                      <div style={{fontSize:"0.72rem",color:"#ef4444",fontWeight:700,marginBottom:3}}>⚠️ Cədvəl tapılmadı və ya oxunmadı</div>
+                      <div style={{fontSize:"0.65rem",color:"#94a3b8"}}>Xəta: {logError}</div>
+                      <div style={{fontSize:"0.62rem",color:"#64748b",marginTop:4}}>
+                        Supabase SQL Editor-da <strong style={{color:"#f59e0b"}}>activity_log_table.sql</strong> faylını işlədin, sonra yenilə düyməsinə basın.
+                      </div>
+                    </div>
+                    <button onClick={reloadLogs} style={{padding:"7px 14px",borderRadius:8,background:"rgba(56,189,248,0.1)",border:"1px solid rgba(56,189,248,0.3)",color:"#38bdf8",cursor:"pointer",fontSize:"0.65rem",fontWeight:700,display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
+                      <RefreshCw size={11}/> Yenilə
+                    </button>
+                  </div>
+                )}
+
+                {/* Statistika kartları */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:16}}>
                   {[
-                    { label:"Ümumi Qeyd",    value:logs.length,                                                  color:"#38bdf8", Icon:ClipboardList },
-                    { label:"Giriş/Çıxış",   value:logs.filter(l=>l.category==="auth").length,                  color:"#10b981", Icon:LogIn        },
-                    { label:"Məlumat Girişi", value:logs.filter(l=>l.category==="data").length,                  color:"#f59e0b", Icon:PenLine       },
-                    { label:"Admin Əməliyyat",value:logs.filter(l=>l.category==="admin").length,                 color:"#ef4444", Icon:Crown         },
-                    { label:"Mesaj",          value:logs.filter(l=>l.category==="message").length,               color:"#a78bfa", Icon:MessageSquare },
-                    { label:"Hadisə",         value:logs.filter(l=>l.category==="incident").length,              color:"#f97316", Icon:AlertTriangle },
+                    { label:"Ümumi",        value:logs.length,                                     color:"#38bdf8", Icon:ClipboardList },
+                    { label:"Giriş/Çıxış", value:logs.filter(l=>l.category==="auth").length,      color:"#10b981", Icon:LogIn         },
+                    { label:"Məlumat",      value:logs.filter(l=>l.category==="data").length,      color:"#f59e0b", Icon:PenLine        },
+                    { label:"Admin",        value:logs.filter(l=>l.category==="admin").length,     color:"#ef4444", Icon:Crown          },
+                    { label:"Mesaj",        value:logs.filter(l=>l.category==="message").length,   color:"#a78bfa", Icon:MessageSquare  },
+                    { label:"Hadisə",       value:logs.filter(l=>l.category==="incident").length,  color:"#f97316", Icon:AlertTriangle  },
                   ].map(({label,value,color,Icon})=>(
-                    <div key={label} style={{...card(),display:"flex",gap:12,alignItems:"center",padding:14}}>
-                      <div style={{width:36,height:36,borderRadius:10,background:`${color}15`,border:`1px solid ${color}25`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                        <Icon size={16} style={{color}}/>
+                    <div key={label} style={{...card(),display:"flex",alignItems:"center",gap:10,padding:12}}>
+                      <div style={{width:32,height:32,borderRadius:9,background:`${color}15`,border:`1px solid ${color}25`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                        <Icon size={14} style={{color}}/>
                       </div>
                       <div>
-                        <div style={{fontSize:"0.62rem",color:"#475569"}}>{label}</div>
-                        <div style={{fontSize:"1.1rem",fontWeight:900,color:"#f1f5f9",lineHeight:1.1}}>{value}</div>
+                        <div style={{fontSize:"0.58rem",color:"#475569"}}>{label}</div>
+                        <div style={{fontSize:"1.05rem",fontWeight:900,color:"#f1f5f9",lineHeight:1.1}}>{value}</div>
                       </div>
                     </div>
                   ))}
                 </div>
 
-                {/* Log cədvəli */}
+                {/* Cədvəl */}
                 <div style={card()}>
-                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
                     <History size={14} style={{color:"#38bdf8"}}/>
                     <h3 style={{color:"#f1f5f9",fontSize:"0.85rem",fontWeight:800,margin:0}}>Fəaliyyət Jurnalı</h3>
-                    <span style={{fontSize:"0.6rem",color:"#334155",marginLeft:"auto"}}>Son {logs.length} qeyd</span>
+                    <span style={{fontSize:"0.6rem",color:"#334155",marginLeft:"auto"}}>{logs.length} qeyd</span>
+                    <button onClick={reloadLogs} style={{padding:"5px 10px",borderRadius:7,background:"rgba(56,189,248,0.06)",border:"1px solid rgba(56,189,248,0.15)",color:"#38bdf8",cursor:"pointer",fontSize:"0.62rem",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+                      <RefreshCw size={10}/> Yenilə
+                    </button>
                   </div>
 
                   {logsLoading ? (
-                    <div style={{textAlign:"center",padding:"32px 0",display:"flex",alignItems:"center",justifyContent:"center",gap:8,color:"#334155",fontSize:"0.72rem"}}>
+                    <div style={{textAlign:"center",padding:"40px 0",display:"flex",alignItems:"center",justifyContent:"center",gap:8,color:"#334155",fontSize:"0.72rem"}}>
                       <RefreshCw size={14} style={{animation:"spin 1s linear infinite",color:"#38bdf8"}}/> Yüklənir...
                     </div>
-                  ) : logs.length === 0 ? (
-                    <div style={{textAlign:"center",padding:"40px 0",color:"#334155",fontSize:"0.72rem"}}>
-                      <History size={28} style={{color:"#1e293b",marginBottom:10}}/>
-                      <div>Hələ heç bir fəaliyyət qeydə alınmayıb</div>
+                  ) : logs.length === 0 && !logError ? (
+                    <div style={{textAlign:"center",padding:"48px 0"}}>
+                      <History size={32} style={{color:"#1e293b",marginBottom:10}}/>
+                      <div style={{color:"#334155",fontSize:"0.72rem",marginBottom:6}}>Hələ heç bir fəaliyyət qeydə alınmayıb</div>
+                      <div style={{fontSize:"0.62rem",color:"#1e293b"}}>Sistemə giriş, məlumat daxiletmə və ya mesaj göndərdikdən sonra burada görünəcək</div>
                     </div>
-                  ) : (
-                    <div style={{display:"flex",flexDirection:"column",gap:0,maxHeight:600,overflowY:"auto"}}>
-                      {/* Cədvəl başlığı */}
-                      <div style={{display:"grid",gridTemplateColumns:"140px 130px 100px 1fr 1fr",gap:12,padding:"8px 14px",borderBottom:"1px solid rgba(56,189,248,0.1)",marginBottom:4}}>
+                  ) : logs.length > 0 ? (
+                    <div style={{overflowX:"auto"}}>
+                      {/* Başlıq sətri */}
+                      <div style={{display:"grid",gridTemplateColumns:"150px 140px 110px 180px 1fr",gap:8,padding:"7px 12px",borderBottom:"1px solid rgba(56,189,248,0.1)",marginBottom:2}}>
                         {["Tarix & Saat","İstifadəçi","Rol","Əməliyyat","Hədəf / Təfərrüat"].map(h=>(
-                          <div key={h} style={{fontSize:"0.58rem",color:"#334155",fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
+                          <div key={h} style={{fontSize:"0.55rem",color:"#334155",fontWeight:700,letterSpacing:"0.1em",textTransform:"uppercase"}}>{h}</div>
                         ))}
                       </div>
 
-                      {logs.map((log, idx) => {
-                        const catColors = {
-                          auth:     "#10b981",
-                          data:     "#f59e0b",
-                          admin:    "#ef4444",
-                          message:  "#a78bfa",
-                          incident: "#f97316",
-                          general:  "#38bdf8",
-                        };
-                        const catColor = catColors[log.category] || "#38bdf8";
-                        const rd = ROLES_DEF.find(r=>r.id===normalizeRole(log.user_role)) || ROLES_DEF[3];
-                        const dt = new Date(log.created_at);
-                        const dateStr = dt.toLocaleDateString("az-AZ",{day:"2-digit",month:"2-digit",year:"numeric"});
-                        const timeStr = dt.toLocaleTimeString("az-AZ",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
-                        const isEven = idx % 2 === 0;
+                      <div style={{maxHeight:520,overflowY:"auto"}}>
+                        {logs.map((log, idx) => {
+                          const catColors = { auth:"#10b981", data:"#f59e0b", admin:"#ef4444", message:"#a78bfa", incident:"#f97316", general:"#38bdf8" };
+                          const catColor = catColors[log.category] || "#38bdf8";
+                          const rd = ROLES_DEF.find(r=>r.id===normalizeRole(log.user_role)) || ROLES_DEF[3];
+                          const dt = new Date(log.created_at);
+                          const dateStr = dt.toLocaleDateString("az-AZ",{day:"2-digit",month:"2-digit",year:"numeric"});
+                          const timeStr = dt.toLocaleTimeString("az-AZ",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+                          const initials = (log.user_name||"??").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
 
-                        return (
-                          <div
-                            key={log.id}
-                            style={{
-                              display:"grid",
-                              gridTemplateColumns:"140px 130px 100px 1fr 1fr",
-                              gap:12,
-                              padding:"10px 14px",
-                              background: isEven ? "rgba(255,255,255,0.015)" : "transparent",
-                              borderBottom:"1px solid rgba(56,189,248,0.04)",
-                              alignItems:"center",
-                              transition:"background 0.15s",
-                            }}
-                            onMouseEnter={e=>e.currentTarget.style.background="rgba(56,189,248,0.04)"}
-                            onMouseLeave={e=>e.currentTarget.style.background=isEven?"rgba(255,255,255,0.015)":"transparent"}
-                          >
-                            {/* Tarix */}
-                            <div>
-                              <div style={{fontSize:"0.68rem",color:"#94a3b8",fontWeight:600}}>{dateStr}</div>
-                              <div style={{fontSize:"0.62rem",color:"#475569",marginTop:1,fontVariantNumeric:"tabular-nums"}}>{timeStr}</div>
-                            </div>
-
-                            {/* İstifadəçi */}
-                            <div style={{display:"flex",alignItems:"center",gap:6}}>
-                              <div style={{width:22,height:22,borderRadius:6,background:`${rd.color}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.52rem",fontWeight:900,color:rd.color,flexShrink:0}}>
-                                {(log.user_name||"??").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}
+                          return (
+                            <div
+                              key={log.id||idx}
+                              style={{
+                                display:"grid",
+                                gridTemplateColumns:"150px 140px 110px 180px 1fr",
+                                gap:8,
+                                padding:"9px 12px",
+                                background: idx%2===0 ? "rgba(255,255,255,0.012)" : "transparent",
+                                borderBottom:"1px solid rgba(56,189,248,0.03)",
+                                alignItems:"center",
+                                cursor:"default",
+                                transition:"background 0.12s",
+                              }}
+                              onMouseEnter={e=>e.currentTarget.style.background="rgba(56,189,248,0.05)"}
+                              onMouseLeave={e=>e.currentTarget.style.background=idx%2===0?"rgba(255,255,255,0.012)":"transparent"}
+                            >
+                              {/* Tarix & Saat */}
+                              <div>
+                                <div style={{fontSize:"0.67rem",color:"#94a3b8",fontWeight:600}}>{dateStr}</div>
+                                <div style={{fontSize:"0.6rem",color:"#475569",marginTop:1,fontVariantNumeric:"tabular-nums"}}>{timeStr}</div>
                               </div>
-                              <span style={{fontSize:"0.68rem",color:"#e2e8f0",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                                {log.user_name||"—"}
-                              </span>
-                            </div>
 
-                            {/* Rol */}
-                            <div>
-                              <RoleBadge role={normalizeRole(log.user_role)} size="xs"/>
-                            </div>
+                              {/* İstifadəçi */}
+                              <div style={{display:"flex",alignItems:"center",gap:6,overflow:"hidden"}}>
+                                <div style={{width:20,height:20,borderRadius:5,background:`${rd.color}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.5rem",fontWeight:900,color:rd.color,flexShrink:0}}>
+                                  {initials}
+                                </div>
+                                <span style={{fontSize:"0.66rem",color:"#e2e8f0",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                  {log.user_name||"—"}
+                                </span>
+                              </div>
 
-                            {/* Əməliyyat */}
-                            <div style={{display:"flex",alignItems:"center",gap:6}}>
-                              <div style={{width:6,height:6,borderRadius:"50%",background:catColor,flexShrink:0,boxShadow:`0 0 5px ${catColor}80`}}/>
-                              <span style={{fontSize:"0.7rem",color:"#f1f5f9",fontWeight:700}}>{log.action}</span>
-                            </div>
+                              {/* Rol */}
+                              <div><RoleBadge role={normalizeRole(log.user_role)} size="xs"/></div>
 
-                            {/* Hədəf / Təfərrüat */}
-                            <div>
-                              {log.target && (
-                                <div style={{fontSize:"0.68rem",color:"#94a3b8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{log.target}</div>
-                              )}
-                              {log.detail && (
-                                <div style={{fontSize:"0.62rem",color:"#475569",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontStyle:"italic"}}>{log.detail}</div>
-                              )}
+                              {/* Əməliyyat */}
+                              <div style={{display:"flex",alignItems:"center",gap:5,overflow:"hidden"}}>
+                                <div style={{width:5,height:5,borderRadius:"50%",background:catColor,flexShrink:0,boxShadow:`0 0 4px ${catColor}`}}/>
+                                <span style={{fontSize:"0.68rem",color:"#f1f5f9",fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{log.action}</span>
+                              </div>
+
+                              {/* Hədəf / Təfərrüat */}
+                              <div style={{overflow:"hidden"}}>
+                                {log.target && <div style={{fontSize:"0.66rem",color:"#94a3b8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{log.target}</div>}
+                                {log.detail && <div style={{fontSize:"0.6rem",color:"#475569",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontStyle:"italic"}}>{log.detail}</div>}
+                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
+                      </div>
                     </div>
-                  )}
+                  ) : null}
                 </div>
               </div>
             )}
