@@ -85,14 +85,6 @@ const ENERGY_SOURCES = [
 
 const TOTAL_CAPACITY = ENERGY_SOURCES.reduce((s,e) => s + e.cap, 0);
 
-const INIT_STRATEGIES = [
-  { id:1, title:"Günəş panellərinin yönümləndirilməsi", category:"Günəş Enerjisi", categoryColor:"#F59E0B", desc:"Naxçıvan və Şərur GES-lərinin 240 panelinin günəş izləmə sistemi ilə yönümləndirilməsi", impact:"+12.4% istehsal artımı", annualSavings:"486,000 ₼", energySaved:"1,215 MWh/il", co2Reduction:"487 ton/il", duration:"3-4 ay", priority:"Yüksək", priorityColor:"#ef4444", status:"Planlaşdırılıb", statusColor:"#f59e0b", roi:"14 ay", progress:0,  completed:false },
-  { id:2, title:"Gecə saatlarında Modul stansiya yük azaldılması", category:"İstilik Stansiyası", categoryColor:"#ef4444", desc:"23:00-05:00 arasında Modul stansiyasının yükünün 60 MW-a endirilməsi", impact:"-8.3% yanacaq sərfi", annualSavings:"312,000 ₼", energySaved:"780 MWh/il", co2Reduction:"312 ton/il", duration:"2-3 həftə", priority:"Yüksək", priorityColor:"#ef4444", status:"İcradadır", statusColor:"#38bdf8", roi:"8 ay", progress:62, completed:false },
-  { id:3, title:"Araz SES kabel izolyasiyası yenilənməsi", category:"Şəbəkə", categoryColor:"#3b82f6", desc:"Araz Su Elektrik Stansiyasının 12 km kabel seqmentinin yenilənməsi", impact:"-15.2% ötürmə itkisi", annualSavings:"228,000 ₼", energySaved:"570 MWh/il", co2Reduction:"228 ton/il", duration:"5-6 ay", priority:"Orta", priorityColor:"#f59e0b", status:"Planlaşdırılıb", statusColor:"#f59e0b", roi:"22 ay", progress:0,  completed:false },
-  { id:4, title:"Culfa Hibrid stansiyası yağlama optimizasiyası", category:"Külək Enerjisi", categoryColor:"#06b6d4", desc:"Culfa külək turbinlərinin yağlama intervalının sensor məlumatlarına əsasən uzadılması", impact:"-22% texniki xidmət xərci", annualSavings:"96,000 ₼", energySaved:"240 MWh/il", co2Reduction:"96 ton/il", duration:"1 ay", priority:"Aşağı", priorityColor:"#10b981", status:"Tamamlandı", statusColor:"#10b981", roi:"6 ay", progress:100, completed:true },
-  { id:5, title:"Biləv SES reaktiv güc kompensasiyası", category:"Şəbəkə", categoryColor:"#8b5cf6", desc:"Biləv SES şinindəki güc faktörünün kondensator batareyası ilə yüksəldilməsi", impact:"+9.8% şəbəkə səmərəliliyi", annualSavings:"174,000 ₼", energySaved:"435 MWh/il", co2Reduction:"174 ton/il", duration:"2-3 ay", priority:"Orta", priorityColor:"#f59e0b", status:"Planlaşdırılıb", statusColor:"#f59e0b", roi:"18 ay", progress:15, completed:false }
-];
-
 function normalizeRole(role) {
   if (!role) return "viewer";
   const map = { observer: "viewer", viewer: "viewer", operator: "operator", admin: "admin", vice_admin: "vice_admin" };
@@ -105,12 +97,6 @@ const ROLES_DEF = [
   { id:"operator",    label:"Operator",       color:"#f59e0b", icon:UserCog, desc:"Stansiyalar üzrə əməliyyat hüququ" },
   { id:"viewer",      label:"Müşahidəçi",     color:"#10b981", icon:Eye,     desc:"Yalnız baxış hüququ" }
 ];
-
-const INIT_MESSAGES = [
-  { id:1, fromId:"system", fromName:"Sistem", fromAvatar:"SY", fromRole:"admin", toId:null, toName:"Hamı", subject:"Sistemə Xoş Gəldiniz", body:"Naxçıvan Enerji İdarəetmə Sisteminə xoş gəldiniz. Hər hansı sualınız olarsa administratorla əlaqə saxlayın.", timestamp:new Date(Date.now()-86400000).toISOString(), readBy:[], priority:"normal", type:"broadcast" }
-];
-
-const INIT_DATA_ENTRIES = [];
 
 function getPerms(user) {
   if (!user) return {};
@@ -177,6 +163,7 @@ function PermissionBanner({ message }) {
 }
 
 function relTime(iso) {
+  if (!iso) return "—";
   const d = Date.now() - new Date(iso).getTime();
   const m = Math.floor(d/60000);
   if (m < 1) return "İndicə";
@@ -317,6 +304,225 @@ function EnergyChart({ data }) {
   );
 }
 
+// ✅ SUPABASE SYNC: Messages + Real-time
+function useSupabaseMessages() {
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadMessages = async () => {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (!error && data) {
+        setMessages(data.map(m => ({
+          id: m.id,
+          fromId: m.from_id,
+          fromName: m.from_name,
+          fromAvatar: m.from_avatar || "??",
+          fromRole: m.from_role || "viewer",
+          toId: m.to_id,
+          toName: m.to_name || "Hamı",
+          subject: m.subject,
+          body: m.body,
+          timestamp: m.created_at,
+          readBy: m.read_by || [],
+          priority: m.priority || "normal",
+          type: m.type || "direct"
+        })));
+      }
+      setLoading(false);
+    };
+    loadMessages();
+
+    const channel = supabase
+      .channel('messages-sync')
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        (payload) => {
+          setMessages(prev => [{
+            id: payload.new.id,
+            fromId: payload.new.from_id,
+            fromName: payload.new.from_name,
+            fromAvatar: payload.new.from_avatar || "??",
+            fromRole: payload.new.from_role || "viewer",
+            toId: payload.new.to_id,
+            toName: payload.new.to_name || "Hamı",
+            subject: payload.new.subject,
+            body: payload.new.body,
+            timestamp: payload.new.created_at,
+            readBy: payload.new.read_by || [],
+            priority: payload.new.priority || "normal",
+            type: payload.new.type || "direct"
+          }, ...prev]);
+        }
+      )
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, []);
+
+  return { messages, setMessages, loading };
+}
+
+// ✅ SUPABASE SYNC: Alerts
+function useSupabaseAlerts() {
+  const [alerts, setAlerts] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadAlerts = async () => {
+      const { data, error } = await supabase
+        .from('alerts')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (!error && data) {
+        setAlerts(data.map(a => ({
+          id: a.id,
+          node: a.station_name,
+          component: a.component,
+          severity: a.severity,
+          message: a.message,
+          time: a.created_at ? new Date(a.created_at).toLocaleTimeString('az-AZ') : new Date().toLocaleTimeString('az-AZ'),
+          note: a.note || ""
+        })));
+      }
+      setLoading(false);
+    };
+    loadAlerts();
+
+    const channel = supabase
+      .channel('alerts-sync')
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'alerts' },
+        (payload) => {
+          setAlerts(prev => [{
+            id: payload.new.id,
+            node: payload.new.station_name,
+            component: payload.new.component,
+            severity: payload.new.severity,
+            message: payload.new.message,
+            time: new Date(payload.new.created_at).toLocaleTimeString('az-AZ'),
+            note: payload.new.note || ""
+          }, ...prev]);
+        }
+      )
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, []);
+
+  return { alerts, setAlerts, loading };
+}
+
+// ✅ SUPABASE SYNC: Data Entries
+function useSupabaseDataEntries() {
+  const [dataEntries, setDataEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadEntries = async () => {
+      const { data, error } = await supabase
+        .from('data_entries')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (!error && data) {
+        setDataEntries(data.map(e => ({
+          id: e.id,
+          timestamp: e.created_at,
+          actor: e.actor_name,
+          actorRole: e.actor_role,
+          targetType: e.target_type,
+          target: e.target_name,
+          field: e.field_name,
+          value: e.value,
+          note: e.note || "",
+          color: e.color || "#38bdf8"
+        })));
+      }
+      setLoading(false);
+    };
+    loadEntries();
+
+    const channel = supabase
+      .channel('data-entries-sync')
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'data_entries' },
+        (payload) => {
+          setDataEntries(prev => [{
+            id: payload.new.id,
+            timestamp: payload.new.created_at,
+            actor: payload.new.actor_name,
+            actorRole: payload.new.actor_role,
+            targetType: payload.new.target_type,
+            target: payload.new.target_name,
+            field: payload.new.field_name,
+            value: payload.new.value,
+            note: payload.new.note || "",
+            color: payload.new.color || "#38bdf8"
+          }, ...prev]);
+        }
+      )
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, []);
+
+  return { dataEntries, setDataEntries, loading };
+}
+
+// ✅ SUPABASE SYNC: Strategies
+function useSupabaseStrategies() {
+  const [strategies, setStrategies] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadStrategies = async () => {
+      const { data, error } = await supabase
+        .from('strategies')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (!error && data) {
+        setStrategies(data.map(s => ({
+          id: s.id,
+          title: s.title,
+          category: s.category,
+          categoryColor: s.category_color || "#3b82f6",
+          desc: s.description,
+          roi: s.roi,
+          duration: s.duration,
+          annualSavings: s.annual_savings || "",
+          impact: s.impact || "",
+          priority: s.priority || "Orta",
+          priorityColor: s.priority_color || "#f59e0b",
+          status: s.status || "Planlaşdırılıb",
+          statusColor: s.status_color || "#f59e0b",
+          energySaved: s.energy_saved || "",
+          co2Reduction: s.co2_reduction || "",
+          progress: s.progress || 0,
+          completed: s.completed || false
+        })));
+      }
+      setLoading(false);
+    };
+    loadStrategies();
+
+    const channel = supabase
+      .channel('strategies-sync')
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'strategies' },
+        () => { loadStrategies(); }
+      )
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, []);
+
+  return { strategies, setStrategies, loading };
+}
+
+// ✅ MANUAL DATA ENTRY PANEL
 function ManualDataEntryPanel({ currentUser, perms, sensors, setSensorOverrides, dataEntries, setDataEntries }) {
   const [targetType, setTargetType] = useState("station");
   const [selectedStation, setStation] = useState("");
@@ -356,16 +562,34 @@ function ManualDataEntryPanel({ currentUser, perms, sensors, setSensorOverrides,
 
   const inp = {width:"100%",boxSizing:"border-box",background:"linear-gradient(135deg,rgba(6,12,28,0.95),rgba(4,8,20,0.98))",border:"1px solid rgba(56,189,248,0.18)",borderRadius:9,padding:"9px 12px",color:"#e2e8f0",fontSize:"0.76rem",fontFamily:"inherit",outline:"none"};
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     setError("");
     if (targetType==="station" && (!selectedStation || !fieldKey || fieldValue==="")) { setError("Stansiyanı, sahəni və dəyəri doldurun."); return; }
     if (targetType==="grid" && (!selectedZone || !fieldKey || fieldValue==="")) { setError("Zonu, sahəni və dəyəri doldurun."); return; }
     const numVal = parseFloat(fieldValue);
     if (isNaN(numVal)) { setError("Dəyər rəqəm olmalıdır."); return; }
-    if (targetType==="station") { setSensorOverrides(prev => ({...prev,[selectedStation]:{...(prev[selectedStation]||{}),[fieldKey]:numVal}})); }
+    
+    if (targetType==="station") { 
+      setSensorOverrides(prev => ({...prev,[selectedStation]:{...(prev[selectedStation]||{}),[fieldKey]:numVal}})); 
+    }
+    
     const label = targetType==="station" ? NODES.find(n=>n.id===selectedStation)?.label : selectedZone;
     const fLabel = targetType==="station" ? (sensorLabels[fieldKey]||fieldKey) : (zoneFieldLabels[fieldKey]||fieldKey);
-    setDataEntries(prev => [{id:Date.now(),timestamp:new Date().toISOString(),actor:currentUser.name,actorRole:currentUser.role,targetType,target:label,field:fLabel,value:numVal,note,color:targetType==="station"?(NODES.find(n=>n.id===selectedStation)?.color||"#38bdf8"):"#38bdf8"}, ...prev]);
+    
+    // ✅ Supabase-ə əlavə et
+    const { error: insertError } = await supabase.from('data_entries').insert([{
+      actor_name: currentUser.name,
+      actor_role: currentUser.role,
+      target_type: targetType,
+      target_name: label,
+      field_name: fLabel,
+      value: numVal,
+      note: note,
+      color: targetType==="station"?(NODES.find(n=>n.id===selectedStation)?.color||"#38bdf8"):"#38bdf8"
+    }]);
+
+    if (insertError) { setError("Məlumat qeydə alınmadı: " + insertError.message); return; }
+    
     setFieldValue(""); setNote(""); setSaved(true); setTimeout(()=>setSaved(false), 2500);
   };
 
@@ -425,6 +649,7 @@ function ManualDataEntryPanel({ currentUser, perms, sensors, setSensorOverrides,
   );
 }
 
+// ✅ AUTH SCREEN (Supabase ilə)
 function AuthScreen({ onLogin, onRegister }) {
   const [mode, setMode] = useState("login");
   const [username, setUsername] = useState("");
@@ -508,6 +733,7 @@ function AuthScreen({ onLogin, onRegister }) {
   );
 }
 
+// ✅ MESSAGING PANEL (Supabase ilə)
 function MessagingPanel({ currentUser, users, messages, onSend, perms }) {
   const [tab, setTab] = useState("inbox");
   const [compose, setCompose] = useState(false);
@@ -527,13 +753,33 @@ function MessagingPanel({ currentUser, users, messages, onSend, perms }) {
     ...(perms.canBroadcast?[{value:"broadcast",label:"📢 Hər Kəs (Broadcast)",colorDot:"#f97316"}]:[]),
     ...users.filter(u=>u.id!==currentUser.id).map(u=>({value:String(u.id),label:`${u.name}`,sub:ROLES_DEF.find(r=>r.id===u.role)?.label,colorDot:ROLES_DEF.find(r=>r.id===u.role)?.color||"#64748b"}))
   ];
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!subject||!body) return;
     const isBroadcast = recipient==="broadcast";
     const toUser = isBroadcast?null:users.find(u=>String(u.id)===recipient);
-    onSend({fromId:currentUser.id,fromName:currentUser.name,fromAvatar:currentUser.avatar,fromRole:currentUser.role,toId:isBroadcast?null:(toUser?.id||null),toName:isBroadcast?"Hamı":(toUser?.name||""),subject,body,priority,type:isBroadcast?"broadcast":"direct"});
-    setCompose(false); setSubj(""); setBody(""); setRec("broadcast"); setPri("normal");
+    
+    // ✅ Supabase-ə əlavə et
+    const { error } = await supabase.from('messages').insert([{
+      from_id: currentUser.id,
+      from_name: currentUser.name,
+      from_avatar: currentUser.avatar,
+      from_role: currentUser.role,
+      to_id: isBroadcast?null:(toUser?.id||null),
+      to_name: isBroadcast?"Hamı":(toUser?.name||""),
+      subject,
+      body,
+      priority,
+      type: isBroadcast?"broadcast":"direct",
+      read_by: [currentUser.id]
+    }]);
+
+    if (error) {
+      console.error("Message send error:", error);
+    } else {
+      setCompose(false); setSubj(""); setBody(""); setRec("broadcast"); setPri("normal");
+    }
   };
+  
   if (viewing) {
     const msg = messages.find(m=>m.id===viewing);
     if (!msg) { setView(null); return null; }
@@ -598,281 +844,76 @@ function MessagingPanel({ currentUser, users, messages, onSend, perms }) {
   );
 }
 
-function StrategyModal({ onClose, onSave, initial }) {
-  const isEdit = !!initial;
-  const [title, setTitle] = useState(initial?.title||"");
-  const [cat, setCat] = useState(initial?.category||"Şəbəkə");
-  const [pri, setPri] = useState(initial?.priority||"Orta");
-  const [status, setStatus] = useState(initial?.status||"Planlaşdırılıb");
-  const [desc, setDesc] = useState(initial?.desc||"");
-  const [roi, setRoi] = useState(initial?.roi||"");
-  const [dur, setDur] = useState(initial?.duration||"");
-  const [savings, setSav] = useState(initial?.annualSavings||"");
-  const [impact, setImp] = useState(initial?.impact||"");
-  const inp = {width:"100%",boxSizing:"border-box",background:"linear-gradient(135deg,rgba(6,12,28,0.95),rgba(4,8,20,0.98))",border:"1px solid rgba(56,189,248,0.18)",borderRadius:9,padding:"9px 12px",color:"#e2e8f0",fontSize:"0.76rem",fontFamily:"inherit",outline:"none"};
-  const catOpts = ["Şəbəkə","Günəş Enerjisi","İstilik Stansiyası","Su Enerjisi","Külək Enerjisi"].map(v=>({value:v,label:v}));
-  const priOpts = [{value:"Yüksək",label:"Yüksək",colorDot:"#ef4444"},{value:"Orta",label:"Orta",colorDot:"#f59e0b"},{value:"Aşağı",label:"Aşağı",colorDot:"#10b981"}];
-  const statusOpts = [{value:"Planlaşdırılıb",label:"Planlaşdırılıb",colorDot:"#f59e0b"},{value:"İcradadır",label:"İcradadır",colorDot:"#38bdf8"},{value:"Tamamlandı",label:"Tamamlandı",colorDot:"#10b981"}];
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(6px)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-      <div style={{width:"100%",maxWidth:520,background:"linear-gradient(135deg,rgba(6,12,28,0.98),rgba(4,8,20,0.99))",border:"1px solid rgba(56,189,248,0.2)",borderRadius:16,padding:28,maxHeight:"90vh",overflowY:"auto"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-          <h3 style={{color:"#f1f5f9",fontSize:"0.9rem",fontWeight:800,margin:0}}>{isEdit?"Strategiyanı Düzəlt":"Yeni Strategiya"}</h3>
-          <button onClick={onClose} style={{background:"none",border:"none",color:"#475569",cursor:"pointer"}}><X size={16}/></button>
-        </div>
-        <div style={{display:"flex",flexDirection:"column",gap:12}}>
-          <input placeholder="Başlıq" value={title} onChange={e=>setTitle(e.target.value)} style={inp}/>
-          <input placeholder="Təsvir" value={desc} onChange={e=>setDesc(e.target.value)} style={inp}/>
-          <DarkSelect value={cat} onChange={setCat} options={catOpts} placeholder="Kateqoriya"/>
-          <DarkSelect value={pri} onChange={setPri} options={priOpts} placeholder="Prioritet"/>
-          <DarkSelect value={status} onChange={setStatus} options={statusOpts} placeholder="Status"/>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-            <input placeholder="ROI müddəti" value={roi} onChange={e=>setRoi(e.target.value)} style={inp}/>
-            <input placeholder="Müddət" value={dur} onChange={e=>setDur(e.target.value)} style={inp}/>
-          </div>
-          <input placeholder="İllik qənaət (₼)" value={savings} onChange={e=>setSav(e.target.value)} style={inp}/>
-          <input placeholder="Təsir (+X% / -Y%)" value={impact} onChange={e=>setImp(e.target.value)} style={inp}/>
-          <div style={{display:"flex",gap:10,marginTop:4}}>
-            <button onClick={onClose} style={{flex:1,padding:"10px",borderRadius:9,border:"1px solid rgba(100,116,139,0.25)",background:"transparent",color:"#475569",cursor:"pointer",fontSize:"0.76rem"}}>Ləğv Et</button>
-            <button onClick={()=>onSave({title,category:cat,categoryColor:"#3b82f6",desc,roi,duration:dur,annualSavings:savings,impact,priority:pri,priorityColor:pri==="Yüksək"?"#ef4444":pri==="Orta"?"#f59e0b":"#10b981",status,statusColor:status==="Tamamlandı"?"#10b981":status==="İcradadır"?"#38bdf8":"#f59e0b",energySaved:"",co2Reduction:"",progress:0,completed:false})} style={{flex:1,padding:"10px",borderRadius:9,border:"1px solid rgba(56,189,248,0.35)",background:"rgba(56,189,248,0.12)",color:"#38bdf8",cursor:"pointer",fontSize:"0.76rem",fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-              <Save size={13}/>{isEdit?"Yenilə":"Əlavə Et"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ManualIncidentPanel({ perms, onAddAlert }) {
-  const [station, setStation] = useState(NODES[0].id);
-  const [component, setComp] = useState("");
-  const [severity, setSev] = useState("orta");
-  const [message, setMsg] = useState("");
-  const [note, setNote] = useState("");
-  const [saved, setSaved] = useState(false);
-  const stationOpts = NODES.map(n=>({value:n.id,label:n.label,colorDot:n.color}));
-  const sevOpts = [{value:"yüksək",label:"Kritik",colorDot:"#ef4444"},{value:"orta",label:"Diqqət",colorDot:"#f59e0b"},{value:"aşağı",label:"Normal",colorDot:"#10b981"}];
-  const inp = {width:"100%",boxSizing:"border-box",background:"linear-gradient(135deg,rgba(6,12,28,0.95),rgba(4,8,20,0.98))",border:"1px solid rgba(56,189,248,0.18)",borderRadius:9,padding:"9px 12px",color:"#e2e8f0",fontSize:"0.76rem",fontFamily:"inherit",outline:"none"};
-  const submit = () => {
-    if (!component||!message) return;
-    const node = NODES.find(n=>n.id===station);
-    onAddAlert({node:node?.label||station,component,severity,message,note,time:new Date().toLocaleTimeString("az-AZ")});
-    setComp(""); setMsg(""); setNote(""); setSaved(true); setTimeout(()=>setSaved(false), 2500);
-  };
-  if (!perms.canAddIncidents) return <PermissionBanner message="Hadisə əlavə etmək üçün Operator, Baş Müavin və ya Administrator hüququ lazımdır."/>;
-  return (
-    <div>
-      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}><FileWarning size={16} style={{color:"#f97316"}}/><h3 style={{color:"#f1f5f9",fontSize:"0.85rem",fontWeight:800,margin:0}}>Hadisə Qeydiyyatı</h3></div>
-      {saved&&<div style={{background:"rgba(16,185,129,0.1)",border:"1px solid rgba(16,185,129,0.25)",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:"0.72rem",color:"#34d399",display:"flex",alignItems:"center",gap:6}}><CheckCircle size={12}/> Hadisə qeydə alındı</div>}
-      <div style={{display:"flex",flexDirection:"column",gap:12}}>
-        <DarkSelect value={station} onChange={setStation} options={stationOpts} placeholder="Stansiyanı seçin" accentColor="#f97316"/>
-        <input placeholder="Komponent (məs: Türbin-A, Kabel-3)" value={component} onChange={e=>setComp(e.target.value)} style={inp}/>
-        <DarkSelect value={severity} onChange={setSev} options={sevOpts} placeholder="Səviyyə" accentColor="#f97316"/>
-        <input placeholder="Qısa mesaj" value={message} onChange={e=>setMsg(e.target.value)} style={inp}/>
-        <textarea placeholder="Ətraflı qeyd (ixtiyari)" value={note} onChange={e=>setNote(e.target.value)} rows={3} style={{...inp,resize:"none"}}/>
-        <button onClick={submit} style={{padding:"10px",borderRadius:9,background:"linear-gradient(135deg,rgba(249,115,22,0.18),rgba(249,115,22,0.08))",border:"1px solid rgba(249,115,22,0.35)",color:"#f97316",fontWeight:800,fontSize:"0.76rem",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Plus size={13}/> Hadisə Əlavə Et</button>
-      </div>
-    </div>
-  );
-}
-
-function AdminPanel({ currentUser, users, setUsers, pending, setPending, activityLog, setActivityLog, perms }) {
-  const [sub, setSub] = useState("users");
-  const [editingUser, setEditingUser] = useState(null);
-  const [newRole, setNewRole] = useState("");
-
-  const logAction = (action, target, details, color="#10b981") => {
-    setActivityLog(prev => [{id:Date.now(),timestamp:new Date().toISOString(),actorName:currentUser.name,actorRole:currentUser.role,action,target,details,color}, ...prev]);
-  };
-
-  const approve = async (req) => {
-    const roleToSave = normalizeRole(req.requestedRole || req.role);
-    const { error } = await supabase.from('users').update({ status: 'approved', role: roleToSave }).eq('id', req.id);
-    if (error) { console.error("Approve error:", error); return; }
-    const newUser = {
-      id: req.id, username: req.username, password: req.password,
-      name: req.name || req.full_name, role: roleToSave, email: req.email,
-      createdAt: new Date().toISOString().split("T")[0], status: "active",
-      avatar: (req.name || req.full_name || "??").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase(),
-      serviceArea: req.serviceArea || req.service_region || "Bütün Ərazilər"
-    };
-    setUsers(prev => [...prev, newUser]);
-    setPending(prev => prev.filter(p => p.id !== req.id));
-    logAction("approve", req.name || req.full_name, `${ROLES_DEF.find(r=>r.id===roleToSave)?.label} kimi təsdiqləndi`, "#10b981");
-  };
-
-  const reject = async (req) => {
-    const { error } = await supabase.from('users').update({ status: 'rejected' }).eq('id', req.id);
-    if (error) { console.error("Reject error:", error); return; }
-    setPending(prev => prev.filter(p => p.id !== req.id));
-    logAction("reject", req.name || req.full_name, "Qeydiyyat tələbi rədd edildi", "#ef4444");
-  };
-
-  const blockUser = async (u) => {
-    const newStatus = u.status === "active" ? "blocked" : "active";
-    await supabase.from('users').update({ status: newStatus }).eq('id', u.id);
-    setUsers(prev => prev.map(x => x.id===u.id ? {...x,status:newStatus} : x));
-    logAction(u.status==="active"?"block":"unblock", u.name, u.status==="active"?"Hesab bloklandı":"Hesab blokdan çıxarıldı", u.status==="active"?"#ef4444":"#10b981");
-  };
-
-  const changeRole = async (u, role) => {
-    const oldRole = ROLES_DEF.find(r=>r.id===u.role)?.label;
-    const newRoleLabel = ROLES_DEF.find(r=>r.id===role)?.label;
-    await supabase.from('users').update({ role }).eq('id', u.id);
-    setUsers(prev => prev.map(x => x.id===u.id ? {...x,role} : x));
-    logAction("role_change", u.name, `Rol dəyişdirildi: ${oldRole} → ${newRoleLabel}`, "#f97316");
-    setEditingUser(null);
-  };
-
-  const availableRoles = perms.canManageAdmins ? ROLES_DEF : ROLES_DEF.filter(r => r.id !== "admin" && r.id !== "vice_admin");
-  const roleOpts = availableRoles.map(r=>({value:r.id,label:r.label,colorDot:r.color,sub:r.desc}));
-  const subTabs = [{k:"users",l:"İstifadəçilər",Icon:Users},{k:"pending",l:`Gözləyən${pending.length>0?` (${pending.length})`:""}`,Icon:UserCheck},{k:"activity",l:"Jurnal",Icon:History}];
-
-  return (
-    <div>
-      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}><Crown size={16} style={{color:"#ef4444"}}/><h3 style={{color:"#f1f5f9",fontSize:"0.85rem",fontWeight:800,margin:0}}>İdarəetmə Paneli</h3></div>
-      <div style={{display:"flex",gap:5,marginBottom:16,flexWrap:"wrap"}}>
-        {subTabs.map(({k,l,Icon})=>(
-          <button key={k} onClick={()=>setSub(k)} style={{padding:"6px 12px",borderRadius:7,border:`1px solid ${sub===k?"rgba(239,68,68,0.4)":"rgba(239,68,68,0.12)"}`,background:sub===k?"rgba(239,68,68,0.1)":"transparent",color:sub===k?"#ef4444":"#475569",cursor:"pointer",fontSize:"0.62rem",fontWeight:700,display:"flex",alignItems:"center",gap:5}}>
-            <Icon size={11}/>{l}
-          </button>
-        ))}
-      </div>
-      {sub==="users"&&(
-        <div style={{display:"flex",flexDirection:"column",gap:6}}>
-          {users.length===0&&<div style={{color:"#334155",fontSize:"0.72rem",textAlign:"center",padding:"20px 0"}}>İstifadəçi tapılmadı</div>}
-          {users.map(u=>(
-            <div key={u.id} style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(56,189,248,0.1)",borderRadius:10,padding:"10px 12px"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-                <div style={{display:"flex",gap:10,alignItems:"center",flex:1,minWidth:0}}>
-                  <div style={{width:32,height:32,borderRadius:8,background:`${ROLES_DEF.find(r=>r.id===u.role)?.color||"#64748b"}20`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.6rem",fontWeight:900,color:ROLES_DEF.find(r=>r.id===u.role)?.color||"#64748b",flexShrink:0}}>{u.avatar}</div>
-                  <div style={{minWidth:0}}>
-                    <div style={{fontSize:"0.74rem",fontWeight:700,color:u.status==="blocked"?"#475569":"#e2e8f0",display:"flex",alignItems:"center",gap:5}}>{u.name} {u.status==="blocked"&&<UserX size={11} style={{color:"#ef4444"}}/>}</div>
-                    <div style={{fontSize:"0.6rem",color:"#334155",marginTop:2}}>@{u.username} · {u.serviceArea}</div>
-                    <div style={{marginTop:4}}><RoleBadge role={u.role} size="xs"/></div>
-                  </div>
-                </div>
-                {u.id!==currentUser.id&&(
-                  <div style={{display:"flex",gap:5,flexShrink:0}}>
-                    {perms.canManageOps&&(editingUser===u.id?(
-                      <div style={{display:"flex",gap:5,alignItems:"center"}}>
-                        <DarkSelect value={newRole} onChange={setNewRole} options={roleOpts} placeholder="Rol seçin" style={{width:160}} accentColor="#ef4444"/>
-                        <button onClick={()=>newRole&&changeRole(u,newRole)} style={{padding:"5px 10px",borderRadius:7,background:"rgba(16,185,129,0.1)",border:"1px solid rgba(16,185,129,0.25)",color:"#10b981",cursor:"pointer",fontSize:"0.6rem"}}><Save size={10}/></button>
-                        <button onClick={()=>setEditingUser(null)} style={{padding:"5px",borderRadius:7,background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",color:"#ef4444",cursor:"pointer"}}><X size={10}/></button>
-                      </div>
-                    ):(
-                      <>
-                        <button onClick={()=>{setEditingUser(u.id);setNewRole(u.role);}} style={{padding:"5px 8px",borderRadius:6,background:"rgba(56,189,248,0.08)",border:"1px solid rgba(56,189,248,0.2)",color:"#38bdf8",cursor:"pointer",fontSize:"0.58rem",display:"flex",alignItems:"center",gap:4}}><Edit3 size={9}/>Rol</button>
-                        <button onClick={()=>blockUser(u)} style={{padding:"5px 8px",borderRadius:6,background:u.status==="blocked"?"rgba(16,185,129,0.08)":"rgba(239,68,68,0.08)",border:`1px solid ${u.status==="blocked"?"rgba(16,185,129,0.2)":"rgba(239,68,68,0.2)"}`,color:u.status==="blocked"?"#10b981":"#ef4444",cursor:"pointer",fontSize:"0.58rem",display:"flex",alignItems:"center",gap:4}}>
-                          {u.status==="blocked"?<><ShieldCheck size={9}/>Açıq</>:<><ShieldOff size={9}/>Blok</>}
-                        </button>
-                      </>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {sub==="pending"&&(
-        <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {pending.length===0&&<div style={{color:"#334155",fontSize:"0.72rem",textAlign:"center",padding:"20px 0"}}>Gözləyən müraciət yoxdur</div>}
-          {pending.map(req=>(
-            <div key={req.id} style={{background:"rgba(56,189,248,0.03)",border:"1px solid rgba(56,189,248,0.15)",borderRadius:10,padding:"12px 14px"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-                <div>
-                  <div style={{fontSize:"0.75rem",fontWeight:700,color:"#e2e8f0"}}>{req.name || req.full_name}</div>
-                  <div style={{fontSize:"0.6rem",color:"#475569",marginTop:2}}>@{req.username} · {req.email}</div>
-                  <div style={{marginTop:4}}><RoleBadge role={normalizeRole(req.requestedRole || req.role)} size="xs"/></div>
-                </div>
-                <div style={{fontSize:"0.6rem",color:"#334155"}}>{relTime(req.requestedAt || req.created_at)}</div>
-              </div>
-              <div style={{fontSize:"0.62rem",color:"#94a3b8",marginBottom:8}}>Xidmət: {req.serviceArea || req.service_region}</div>
-              {req.note&&<div style={{fontSize:"0.62rem",color:"#475569",background:"rgba(255,255,255,0.02)",borderRadius:6,padding:"6px 8px",marginBottom:8,fontStyle:"italic"}}>"{req.note}"</div>}
-              <div style={{display:"flex",gap:8}}>
-                <button onClick={()=>approve(req)} style={{flex:1,padding:"7px",borderRadius:7,background:"rgba(16,185,129,0.1)",border:"1px solid rgba(16,185,129,0.25)",color:"#10b981",cursor:"pointer",fontSize:"0.65rem",fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:5}}><UserCheck size={11}/>Təsdiqlə</button>
-                <button onClick={()=>reject(req)} style={{flex:1,padding:"7px",borderRadius:7,background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",color:"#ef4444",cursor:"pointer",fontSize:"0.65rem",fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:5}}><UserX size={11}/>Rədd Et</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {sub==="activity"&&(
-        <div style={{display:"flex",flexDirection:"column",gap:6}}>
-          {activityLog.length===0&&<div style={{color:"#334155",fontSize:"0.72rem",textAlign:"center",padding:"20px 0"}}>Jurnal boşdur</div>}
-          {activityLog.map(entry=>(
-            <div key={entry.id} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"8px 0",borderBottom:"1px solid rgba(255,255,255,0.03)"}}>
-              <div style={{width:8,height:8,borderRadius:"50%",background:entry.color,marginTop:5,flexShrink:0,boxShadow:`0 0 6px ${entry.color}60`}}/>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:"0.68rem",color:"#94a3b8"}}><span style={{color:"#e2e8f0",fontWeight:700}}>{entry.actorName}</span> → {entry.target}</div>
-                <div style={{fontSize:"0.62rem",color:"#475569",marginTop:2}}>{entry.details}</div>
-                <div style={{fontSize:"0.58rem",color:"#334155",marginTop:2}}>{relTime(entry.timestamp)}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ============================================================
-// ANA KOMPONENT
-// ============================================================
+// ✅ ANA KOMPONENT
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [users, setUsers] = useState([]);
   const [pending, setPending] = useState([]);
   const [activityLog, setActLog] = useState([]);
-  const [messages, setMessages] = useState(INIT_MESSAGES);
-  const [strategies, setStrat] = useState(INIT_STRATEGIES);
-  const [dataEntries, setDataEntries] = useState(INIT_DATA_ENTRIES);
+  
+  // ✅ Supabase hooks
+  const { messages, setMessages } = useSupabaseMessages();
+  const { alerts, setAlerts } = useSupabaseAlerts();
+  const { dataEntries, setDataEntries } = useSupabaseDataEntries();
+  const { strategies, setStrategies } = useSupabaseStrategies();
+  
   const [sensorOverrides, setSensorOverrides] = useState({});
-  const [alerts, setAlerts] = useState([
-    { id:1, node:"Culfa Külək-Günəş Hibrid Stansiyası", component:"Turbine Bearing",       severity:"yüksək", message:"Yüksək vibrasiya aşkarlandı — dərhal yoxlayın",  time:"14:23", note:"" },
-    { id:2, node:"Naxçıvan Modul Elektrik Stansiyası",  component:"Boiler Pressure Valve", severity:"orta",   message:"Buxar təzyiqi nominal həddin üst hissəsindədir", time:"14:45", note:"" },
-    { id:3, node:"Naxçıvan Günəş Elektrik Stansiyası",  component:"Inverter Array",        severity:"aşağı",  message:"Panel temperaturunda kiçik sapma — izlənilir",   time:"15:10", note:"" }
-  ]);
 
+  // ✅ Load users və pending
   useEffect(() => {
     const loadPending = async () => {
-      const { data, error } = await supabase.from('users').select('*').eq('status', 'pending');
-      if (error) { console.error("Pending load error:", error); return; }
-      setPending(data || []);
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('status', 'pending');
+      if (!error && data) setPending(data);
     };
     loadPending();
-    const channel = supabase.channel('pending-users')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => { loadPending(); })
+
+    const channel = supabase
+      .channel('pending-users')
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'users' },
+        () => { loadPending(); }
+      )
       .subscribe();
+
     return () => supabase.removeChannel(channel);
   }, []);
 
   useEffect(() => {
     const loadUsers = async () => {
-      const { data, error } = await supabase.from('users').select('*').eq('status', 'approved');
-      if (error) { console.error("Users load error:", error); return; }
-      setUsers((data || []).map(u => ({
-        ...u,
-        name: u.full_name || u.name || u.username,
-        role: normalizeRole(u.role),
-        serviceArea: u.service_region || "Bütün Ərazilər",
-        avatar: (u.full_name || u.name || u.username || "??").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase(),
-        status: u.status || "active"
-      })));
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('status', 'approved');
+      if (!error && data) {
+        setUsers((data || []).map(u => ({
+          ...u,
+          name: u.full_name || u.name || u.username,
+          role: normalizeRole(u.role),
+          serviceArea: u.service_region || "Bütün Ərazilər",
+          avatar: (u.full_name || u.name || u.username || "??").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase(),
+          status: u.status || "active"
+        })));
+      }
     };
     loadUsers();
-    const channel2 = supabase.channel('approved-users')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => { loadUsers(); })
+
+    const channel = supabase
+      .channel('approved-users')
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'users' },
+        () => { loadUsers(); }
+      )
       .subscribe();
-    return () => supabase.removeChannel(channel2);
+
+    return () => supabase.removeChannel(channel);
   }, []);
 
   const [activeTab, setTab] = useState("overview");
   const [selNodeIds, setSelNodeIds] = useState([NODES[0].id, NODES[1].id]);
   const [chartHistory, setChartHist] = useState(CONS_HISTORY);
-  const [stratModal, setStratModal] = useState(false);
   const [filterSev, setFilterSev] = useState("all");
 
   const rawSensors = useSensors();
@@ -891,7 +932,12 @@ export default function App() {
 
   const handleLogin = async (username, password) => {
     if (!username || !password) return { ok:false, msg:"İstifadəçi adı və şifrəni daxil edin." };
-    const { data, error } = await supabase.from('users').select('*').eq('username', username).eq('password', password).single();
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', username)
+      .eq('password', password)
+      .single();
     if (error || !data) return { ok:false, msg:"İstifadəçi adı və ya şifrə yanlışdır." };
     if (data.status === 'pending') return { ok:false, msg:"Hesabınız hələ təsdiqlənməyib. Administrator ilə əlaqə saxlayın." };
     if (data.status === 'rejected') return { ok:false, msg:"Hesab müraciətiniz rədd edilib." };
@@ -899,7 +945,10 @@ export default function App() {
     const normalizedRole = normalizeRole(data.role);
     const userName = data.full_name || data.name || data.username;
     setCurrentUser({
-      ...data, id: data.id, name: userName, role: normalizedRole,
+      ...data,
+      id: data.id,
+      name: userName,
+      role: normalizedRole,
       serviceArea: data.service_region || "Bütün Ərazilər",
       avatar: userName.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()
     });
@@ -913,10 +962,14 @@ export default function App() {
       const { data: existingEmail } = await supabase.from('users').select('id').eq('email', formData.email).maybeSingle();
       if (existingEmail) return { error: "Bu e-poçt artıq qeydiyyatdadır." };
       const insertData = {
-        username: formData.username, password: formData.password,
-        full_name: formData.name, email: formData.email,
-        role: formData.requestedRole || 'viewer', status: 'pending',
-        service_region: formData.serviceArea, note: formData.note || ""
+        username:       formData.username,
+        password:       formData.password,
+        full_name:      formData.name,
+        email:          formData.email,
+        role:           formData.requestedRole || 'viewer',
+        status:         'pending',
+        service_region: formData.serviceArea,
+        note:           formData.note || ""
       };
       const { data, error } = await supabase.from('users').insert([insertData]).select();
       if (error) return { error: `Xəta: ${error.message}` };
@@ -927,10 +980,42 @@ export default function App() {
   };
 
   const handleLogout = () => { setCurrentUser(null); setTab("overview"); };
-  const handleSendMsg = (msg) => setMessages(prev => [{ ...msg, id:Date.now(), timestamp:new Date().toISOString(), readBy:[msg.fromId] }, ...prev]);
-  const addAlert = (a) => setAlerts(prev => [{ ...a, id:Date.now() }, ...prev]);
-  const removeAlert = (id) => setAlerts(prev => prev.filter(a => a.id!==id));
-  const saveStrategy = (s) => { setStrat(prev => [...prev, { ...s, id:Date.now() }]); setStratModal(false); };
+  const addAlert = async (a) => {
+    const { error } = await supabase.from('alerts').insert([{
+      station_name: a.node,
+      component: a.component,
+      severity: a.severity,
+      message: a.message,
+      note: a.note
+    }]);
+    if (error) console.error("Alert insert error:", error);
+  };
+  const removeAlert = async (id) => {
+    await supabase.from('alerts').delete().eq('id', id);
+  };
+
+  const saveStrategy = async (s) => {
+    const { error } = await supabase.from('strategies').insert([{
+      title: s.title,
+      category: s.category,
+      category_color: s.categoryColor || "#3b82f6",
+      description: s.desc,
+      roi: s.roi,
+      duration: s.duration,
+      annual_savings: s.annualSavings || "",
+      impact: s.impact || "",
+      priority: s.priority || "Orta",
+      priority_color: s.priorityColor || "#f59e0b",
+      status: s.status || "Planlaşdırılıb",
+      status_color: s.statusColor || "#f59e0b",
+      energy_saved: s.energySaved || "",
+      co2_reduction: s.co2Reduction || "",
+      progress: s.progress || 0,
+      completed: s.completed || false
+    }]);
+    if (error) console.error("Strategy insert error:", error);
+  };
+
   const toggleNode = (id) => setSelNodeIds(prev => prev.includes(id) ? (prev.length>1?prev.filter(x=>x!==id):prev) : [...prev, id]);
 
   const filteredAlerts = alerts.filter(a => filterSev==="all"||a.severity===filterSev);
@@ -972,6 +1057,7 @@ export default function App() {
         @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
       `}</style>
 
+      {/* HEADER VA TAB NAVIGATION */}
       <header style={{background:"linear-gradient(90deg,rgba(2,6,16,0.95),rgba(4,8,22,0.95))",borderBottom:"1px solid rgba(56,189,248,0.1)",padding:"12px 20px",display:"flex",alignItems:"center",gap:16,position:"sticky",top:0,zIndex:100,backdropFilter:"blur(20px)"}}>
         <div style={{display:"flex",alignItems:"center",gap:10,flex:1,minWidth:0}}>
           <div style={{width:36,height:36,borderRadius:10,background:"linear-gradient(135deg,rgba(56,189,248,0.2),rgba(14,165,233,0.1))",border:"1px solid rgba(56,189,248,0.3)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
@@ -1009,7 +1095,7 @@ export default function App() {
       </nav>
 
       <main style={{padding:20,maxWidth:1400,margin:"0 auto"}}>
-
+        {/* OVERVIEW TAB */}
         {activeTab==="overview"&&(
           <div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:14,marginBottom:20}}>
@@ -1017,8 +1103,7 @@ export default function App() {
                 { label:"Ümumi İstehsal",   value:`${totalOutput.toFixed(1)} MW`,   sub:`Gücün ${gridEfficiency}%-i`,         color:"#38bdf8", Icon:Zap },
                 { label:"Sistem Gücü",      value:`${totalCapacity} MW`,             sub:`${ENERGY_SOURCES.length} mənbə`,    color:"#10b981", Icon:Battery },
                 { label:"Şəbəkə Fəallığı", value:`${gridEfficiency}%`,              sub:"Real vaxt",                         color:"#eab308", Icon:TrendingUp },
-                { label:"Aktiv Hadisələr",  value:alerts.filter(a=>a.severity==="yüksək").length, sub:`${alerts.length} ümumilikdə`, color:"#ef4444", Icon:AlertTriangle },
-                { label:"Yenilenebilir",    value:`${(ENERGY_SOURCES.filter(e=>e.icon!==Zap).reduce((s,e)=>s+e.cur,0)).toFixed(1)} MW`, sub:"Günəş+Su+Külək", color:"#8b5cf6", Icon:Leaf }
+                { label:"Aktiv Hadisələr",  value:filteredAlerts.filter(a=>a.severity==="yüksək").length, sub:`${filteredAlerts.length} ümumilikdə`, color:"#ef4444", Icon:AlertTriangle },
               ].map(({label,value,sub,color,Icon})=>(
                 <div key={label} style={{...card(),display:"flex",gap:14,alignItems:"flex-start"}}>
                   <div style={{width:42,height:42,borderRadius:12,background:`${color}15`,border:`1px solid ${color}30`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Icon size={20} style={{color}}/></div>
@@ -1042,18 +1127,6 @@ export default function App() {
                   </div>
                 </div>
                 <EnergyChart data={chartHistory}/>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginTop:14,paddingTop:12,borderTop:"1px solid rgba(255,255,255,0.04)"}}>
-                  {[
-                    {lbl:"Pik İstehsal",val:`${Math.max(...chartHistory.map(d=>d.i)).toFixed(1)} MW`,col:"#38bdf8"},
-                    {lbl:"Min İstehsal",val:`${Math.min(...chartHistory.map(d=>d.i)).toFixed(1)} MW`,col:"#94a3b8"},
-                    {lbl:"Ortalama",    val:`${(chartHistory.reduce((s,d)=>s+d.i,0)/chartHistory.length).toFixed(1)} MW`,col:"#f59e0b"}
-                  ].map(({lbl,val,col})=>(
-                    <div key={lbl} style={{textAlign:"center"}}>
-                      <div style={{fontSize:"0.58rem",color:"#334155",marginBottom:3}}>{lbl}</div>
-                      <div style={{fontSize:"0.75rem",fontWeight:800,color:col}}>{val}</div>
-                    </div>
-                  ))}
-                </div>
               </div>
               <div style={card()}>
                 <div style={{fontSize:"0.7rem",color:"#64748b",fontWeight:700,marginBottom:12}}>ENERJİ MƏNBƏLƏRİ</div>
@@ -1065,43 +1138,12 @@ export default function App() {
                     <Tooltip contentStyle={{background:"rgba(6,12,28,0.95)",border:"1px solid rgba(56,189,248,0.2)",borderRadius:8,fontSize:11}}/>
                   </PieChart>
                 </ResponsiveContainer>
-                <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:8}}>
-                  {ENERGY_SOURCES.map((e,i)=>(
-                    <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div style={{display:"flex",alignItems:"center",gap:6}}>
-                        <div style={{width:8,height:8,borderRadius:2,background:e.color,flexShrink:0}}/>
-                        <span style={{fontSize:"0.62rem",color:"#64748b"}}>{e.name}</span>
-                      </div>
-                      <span style={{fontSize:"0.62rem",color:"#94a3b8",fontWeight:700}}>{e.cur} MW</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div style={card()}>
-              <div style={{fontSize:"0.7rem",color:"#64748b",fontWeight:700,marginBottom:14}}>PAYLAŞDIRMA ZONALARI</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10}}>
-                {DIST_ZONES.map(z=>{
-                  const pct = Math.round((z.load/z.capacity)*100);
-                  const col = pct>90?"#ef4444":pct>70?"#f59e0b":"#10b981";
-                  return (
-                    <div key={z.name} style={{background:"rgba(255,255,255,0.02)",borderRadius:10,padding:"12px 14px",border:`1px solid ${col}20`}}>
-                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-                        <span style={{fontSize:"0.68rem",color:"#94a3b8",fontWeight:600}}>{z.name}</span>
-                        <span style={{fontSize:"0.65rem",color:col,fontWeight:800}}>{pct}%</span>
-                      </div>
-                      <div style={{height:4,background:"rgba(255,255,255,0.05)",borderRadius:99,overflow:"hidden"}}>
-                        <div style={{height:"100%",width:`${pct}%`,background:`linear-gradient(90deg,${col}80,${col})`,borderRadius:99,transition:"width 1s"}}/>
-                      </div>
-                      <div style={{fontSize:"0.58rem",color:"#334155",marginTop:5}}>{z.load} / {z.capacity} MW · Sağlamlıq: {z.health}%</div>
-                    </div>
-                  );
-                })}
               </div>
             </div>
           </div>
         )}
 
+        {/* STATIONS TAB */}
         {activeTab==="stations"&&(
           <div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
@@ -1152,204 +1194,86 @@ export default function App() {
           </div>
         )}
 
-        {activeTab==="grid"&&(
-          <div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:14,marginBottom:16}}>
-              {ENERGY_SOURCES.map((e,i)=>(
-                <div key={i} style={{...card(),borderColor:`${e.color}20`}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}><e.icon size={16} style={{color:e.color}}/><span style={{fontSize:"0.68rem",color:"#94a3b8",fontWeight:600}}>{e.name}</span></div>
-                  <div style={{fontSize:"1.1rem",fontWeight:900,color:e.color,marginBottom:4}}>{e.cur} MW</div>
-                  <div style={{fontSize:"0.6rem",color:"#334155",marginBottom:8}}>{e.cap} MW gücünün {e.eff}%-i</div>
-                  <div style={{height:4,background:"rgba(255,255,255,0.05)",borderRadius:99,overflow:"hidden"}}>
-                    <div style={{height:"100%",width:`${(e.cur/e.cap)*100}%`,background:`linear-gradient(90deg,${e.color}80,${e.color})`,borderRadius:99}}/>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div style={card()}>
-              <div style={{fontSize:"0.7rem",color:"#64748b",fontWeight:700,marginBottom:14}}>PAYLAŞDIRMA YÜK XƏRİTƏSİ</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10}}>
-                {DIST_ZONES.map(z=>{
-                  const pct = Math.round((z.load/z.capacity)*100);
-                  const col = pct>90?"#ef4444":pct>70?"#f59e0b":"#10b981";
-                  return (
-                    <div key={z.name} style={{background:`${col}08`,borderRadius:10,padding:"12px 14px",border:`1px solid ${col}20`}}>
-                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
-                        <span style={{fontSize:"0.68rem",color:"#94a3b8",fontWeight:700}}>{z.name}</span>
-                        <span style={{fontSize:"0.7rem",color:col,fontWeight:900}}>{pct}%</span>
-                      </div>
-                      <div style={{display:"flex",gap:3,marginBottom:6}}>
-                        {Array.from({length:10}).map((_,j)=>(
-                          <div key={j} style={{flex:1,height:20,borderRadius:3,background:j<Math.round(pct/10)?col:col+"20",transition:"background 0.3s"}}/>
-                        ))}
-                      </div>
-                      <div style={{fontSize:"0.58rem",color:"#334155"}}>{z.load}/{z.capacity} MW · Sağ: {z.health}%</div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
-
+        {/* DATAENTRY TAB */}
         {activeTab==="dataentry"&&(
           <div style={{display:"grid",gridTemplateColumns:"380px 1fr",gap:14}}>
             <div style={card()}>
               <ManualDataEntryPanel currentUser={currentUser} perms={perms} sensors={sensors} setSensorOverrides={setSensorOverrides} dataEntries={dataEntries} setDataEntries={setDataEntries}/>
             </div>
-            <div>
-              <div style={{...card(),marginBottom:14}}>
-                <div style={{fontSize:"0.7rem",color:"#64748b",fontWeight:700,marginBottom:14,display:"flex",alignItems:"center",gap:6}}><Database size={13}/> MƏLUMAT GİRİŞ TARİXÇƏSİ</div>
-                {dataEntries.length===0 ? (
-                  <div style={{textAlign:"center",padding:"32px 0",color:"#334155",fontSize:"0.72rem"}}>Hələ heç bir məlumat daxil edilməyib</div>
-                ):(
-                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                    {dataEntries.map(e=>(
-                      <div key={e.id} style={{display:"grid",gridTemplateColumns:"auto 1fr auto auto auto",gap:12,alignItems:"center",padding:"10px 14px",background:"rgba(255,255,255,0.02)",borderRadius:9,border:`1px solid ${e.color}18`}}>
-                        <div style={{width:8,height:8,borderRadius:"50%",background:e.color,boxShadow:`0 0 6px ${e.color}60`}}/>
-                        <div>
-                          <div style={{fontSize:"0.7rem",color:"#e2e8f0",fontWeight:700}}>{e.target}</div>
-                          <div style={{fontSize:"0.62rem",color:"#475569",marginTop:1}}>{e.field}</div>
-                          {e.note&&<div style={{fontSize:"0.58rem",color:"#334155",marginTop:1,fontStyle:"italic"}}>{e.note}</div>}
-                        </div>
-                        <div style={{textAlign:"right"}}>
-                          <div style={{fontSize:"0.75rem",fontWeight:800,color:e.color}}>{e.value}</div>
-                          <div style={{fontSize:"0.58rem",color:"#334155",marginTop:1}}>{e.targetType==="station"?"Stansiya":"Şəbəkə"}</div>
-                        </div>
-                        <div style={{textAlign:"right"}}>
-                          <div style={{fontSize:"0.65rem",color:"#64748b"}}>{e.actor}</div>
-                          <div style={{fontSize:"0.58rem",color:"#334155",marginTop:1}}>{relTime(e.timestamp)}</div>
-                        </div>
-                        <RoleBadge role={e.actorRole} size="xs"/>
+            <div style={card()}>
+              <div style={{fontSize:"0.7rem",color:"#64748b",fontWeight:700,marginBottom:14,display:"flex",alignItems:"center",gap:6}}><Database size={13}/> MƏLUMAT GİRİŞ TARİXÇƏSİ</div>
+              {dataEntries.length===0 ? (
+                <div style={{textAlign:"center",padding:"32px 0",color:"#334155",fontSize:"0.72rem"}}>Hələ heç bir məlumat daxil edilməyib</div>
+              ):(
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {dataEntries.slice(0,15).map(e=>(
+                    <div key={e.id} style={{display:"grid",gridTemplateColumns:"auto 1fr auto auto auto",gap:12,alignItems:"center",padding:"10px 14px",background:"rgba(255,255,255,0.02)",borderRadius:9,border:`1px solid ${e.color}18`}}>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:e.color,boxShadow:`0 0 6px ${e.color}60`}}/>
+                      <div>
+                        <div style={{fontSize:"0.7rem",color:"#e2e8f0",fontWeight:700}}>{e.target}</div>
+                        <div style={{fontSize:"0.62rem",color:"#475569",marginTop:1}}>{e.field}</div>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div style={{...card(),borderColor:"rgba(56,189,248,0.2)"}}>
-                <div style={{fontSize:"0.7rem",color:"#64748b",fontWeight:700,marginBottom:12,display:"flex",alignItems:"center",gap:6}}><Shield size={13}/> GİRİŞ İCAZƏLƏRİ</div>
-                <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                  {[
-                    {role:"admin",      desc:"Bütün stansiyalar və zonalar",     status:true},
-                    {role:"vice_admin", desc:"Bütün stansiyalar və zonalar",     status:true},
-                    {role:"operator",   desc:"Yalnız öz xidmət sahəsi",         status:true},
-                    {role:"viewer",     desc:"Yalnız baxış (daxiletmə yoxdur)", status:false}
-                  ].map(({role,desc,status})=>(
-                    <div key={role} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 10px",background:"rgba(255,255,255,0.02)",borderRadius:7}}>
-                      <div style={{display:"flex",alignItems:"center",gap:8}}><RoleBadge role={role} size="xs"/><span style={{fontSize:"0.65rem",color:"#64748b"}}>{desc}</span></div>
-                      {status ? <CheckCircle size={13} style={{color:"#10b981"}}/> : <X size={13} style={{color:"#ef4444"}}/>}
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontSize:"0.75rem",fontWeight:800,color:e.color}}>{e.value}</div>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontSize:"0.65rem",color:"#64748b"}}>{e.actor}</div>
+                      </div>
+                      <RoleBadge role={e.actorRole} size="xs"/>
                     </div>
                   ))}
                 </div>
-              </div>
+              )}
             </div>
           </div>
         )}
 
-        {activeTab==="strategies"&&(
+        {/* INCIDENTS TAB */}
+        {activeTab==="incidents"&&(
           <div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-              <div>
-                <h2 style={{color:"#f1f5f9",fontSize:"0.9rem",fontWeight:800,margin:0}}>Optimallaşdırma Strategiyaları</h2>
-                <p style={{color:"#475569",fontSize:"0.65rem",margin:"4px 0 0"}}>İllik potensial qənaət: {strategies.reduce((s,st)=>s+parseFloat((st.annualSavings||"0").replace(/[^0-9]/g,"")),0).toLocaleString()} ₼</p>
-              </div>
-              {perms.canEditStrategies&&<button onClick={()=>setStratModal(true)} style={{padding:"8px 16px",borderRadius:9,background:"rgba(56,189,248,0.1)",border:"1px solid rgba(56,189,248,0.25)",color:"#38bdf8",cursor:"pointer",fontSize:"0.68rem",fontWeight:700,display:"flex",alignItems:"center",gap:7}}><Plus size={13}/>Yeni Strategiya</button>}
-            </div>
-            {!perms.canEditStrategies&&<PermissionBanner message="Strategiya əlavə etmək üçün Operator və ya yuxarı hüquq lazımdır."/>}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))",gap:14}}>
-              {strategies.map(s=>(
-                <div key={s.id} style={{...card(),borderColor:`${s.categoryColor||"#3b82f6"}20`,opacity:s.completed?0.7:1}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                    <span style={{fontSize:"0.58rem",color:s.categoryColor||"#38bdf8",background:`${s.categoryColor||"#38bdf8"}12`,border:`1px solid ${s.categoryColor||"#38bdf8"}25`,borderRadius:4,padding:"2px 8px",fontWeight:800}}>{s.category}</span>
-                    <div style={{display:"flex",gap:5}}>
-                      <span style={{fontSize:"0.55rem",color:s.priorityColor||"#f59e0b",background:`${s.priorityColor||"#f59e0b"}10`,border:`1px solid ${s.priorityColor||"#f59e0b"}25`,borderRadius:4,padding:"2px 8px",fontWeight:800}}>{s.priority}</span>
-                      <span style={{fontSize:"0.55rem",color:s.statusColor||"#f59e0b",background:`${s.statusColor||"#f59e0b"}10`,border:`1px solid ${s.statusColor||"#f59e0b"}25`,borderRadius:4,padding:"2px 8px",fontWeight:800}}>{s.status}</span>
-                    </div>
-                  </div>
-                  <h4 style={{color:"#f1f5f9",fontSize:"0.8rem",fontWeight:800,margin:"0 0 6px"}}>{s.title}</h4>
-                  <p style={{color:"#64748b",fontSize:"0.67rem",lineHeight:1.5,margin:"0 0 12px"}}>{s.desc}</p>
-                  {s.progress>0&&<div style={{marginBottom:10}}>
-                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                      <span style={{fontSize:"0.6rem",color:"#64748b"}}>İcra Gedişatı</span>
-                      <span style={{fontSize:"0.6rem",color:"#38bdf8",fontWeight:700}}>{s.progress}%</span>
-                    </div>
-                    <div style={{height:4,background:"rgba(255,255,255,0.05)",borderRadius:99,overflow:"hidden"}}>
-                      <div style={{height:"100%",width:`${s.progress}%`,background:"linear-gradient(90deg,#38bdf880,#38bdf8)",borderRadius:99}}/>
-                    </div>
-                  </div>}
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                    {[["İllik Qənaət",s.annualSavings,"#10b981"],["Təsir",s.impact,"#38bdf8"],["ROI",s.roi,"#8b5cf6"],["Müddət",s.duration,"#f59e0b"]].map(([lbl,val,col])=>val&&(
-                      <div key={lbl} style={{background:"rgba(255,255,255,0.02)",borderRadius:7,padding:"7px 10px"}}>
-                        <div style={{fontSize:"0.56rem",color:"#334155"}}>{lbl}</div>
-                        <div style={{fontSize:"0.7rem",fontWeight:700,color:col,marginTop:2}}>{val}</div>
-                      </div>
-                    ))}
-                  </div>
-                  {perms.canDeleteEntries&&<button onClick={()=>setStrat(prev=>prev.filter(x=>x.id!==s.id))} style={{width:"100%",marginTop:10,padding:"6px",borderRadius:7,background:"rgba(239,68,68,0.06)",border:"1px solid rgba(239,68,68,0.15)",color:"#ef4444",cursor:"pointer",fontSize:"0.6rem",display:"flex",alignItems:"center",justifyContent:"center",gap:5}}><Trash2 size={10}/>Sil</button>}
-                </div>
+            <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+              <Filter size={13} style={{color:"#64748b"}}/>
+              {["all","yüksək","orta","aşağı"].map(s=>(
+                <button key={s} onClick={()=>setFilterSev(s)} style={{padding:"5px 12px",borderRadius:7,border:`1px solid ${filterSev===s?"rgba(56,189,248,0.4)":"rgba(56,189,248,0.1)"}`,background:filterSev===s?"rgba(56,189,248,0.1)":"transparent",color:filterSev===s?"#38bdf8":"#475569",cursor:"pointer",fontSize:"0.62rem",fontWeight:700}}>
+                  {s==="all"?"Hamısı":SEVERITY_MAP[s].label}
+                </button>
               ))}
             </div>
-          </div>
-        )}
-
-        {activeTab==="incidents"&&(
-          <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:14}}>
-            <div>
-              <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-                <Filter size={13} style={{color:"#64748b"}}/>
-                {["all","yüksək","orta","aşağı"].map(s=>(
-                  <button key={s} onClick={()=>setFilterSev(s)} style={{padding:"5px 12px",borderRadius:7,border:`1px solid ${filterSev===s?"rgba(56,189,248,0.4)":"rgba(56,189,248,0.1)"}`,background:filterSev===s?"rgba(56,189,248,0.1)":"transparent",color:filterSev===s?"#38bdf8":"#475569",cursor:"pointer",fontSize:"0.62rem",fontWeight:700}}>
-                    {s==="all"?"Hamısı":SEVERITY_MAP[s].label}
-                  </button>
-                ))}
-              </div>
-              <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {filteredAlerts.length===0&&<div style={{...card(),textAlign:"center",padding:40,color:"#334155"}}>Hadisə tapılmadı</div>}
-                {filteredAlerts.map(a=>{
-                  const sv = SEVERITY_MAP[a.severity]||SEVERITY_MAP["aşağı"];
-                  return (
-                    <div key={a.id} style={{...card(),borderColor:sv.border,background:`linear-gradient(135deg,${sv.bg},rgba(4,8,20,0.97))`}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
-                        <div style={{flex:1,minWidth:0}}>
-                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
-                            <span style={{fontSize:"0.56rem",color:sv.color,background:sv.bg,border:`1px solid ${sv.border}`,borderRadius:4,padding:"2px 8px",fontWeight:800,flexShrink:0}}>{sv.label}</span>
-                            <span style={{fontSize:"0.65rem",color:"#94a3b8",fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.node}</span>
-                          </div>
-                          <div style={{fontSize:"0.72rem",color:"#f1f5f9",fontWeight:700,marginBottom:3}}>{a.component}</div>
-                          <div style={{fontSize:"0.68rem",color:"#94a3b8"}}>{a.message}</div>
-                          {a.note&&<div style={{fontSize:"0.62rem",color:"#475569",marginTop:4,fontStyle:"italic"}}>Not: {a.note}</div>}
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {filteredAlerts.length===0&&<div style={{...card(),textAlign:"center",padding:40,color:"#334155"}}>Hadisə tapılmadı</div>}
+              {filteredAlerts.map(a=>{
+                const sv = SEVERITY_MAP[a.severity]||SEVERITY_MAP["aşağı"];
+                return (
+                  <div key={a.id} style={{...card(),borderColor:sv.border,background:`linear-gradient(135deg,${sv.bg},rgba(4,8,20,0.97))`}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                          <span style={{fontSize:"0.56rem",color:sv.color,background:sv.bg,border:`1px solid ${sv.border}`,borderRadius:4,padding:"2px 8px",fontWeight:800,flexShrink:0}}>{sv.label}</span>
+                          <span style={{fontSize:"0.65rem",color:"#94a3b8",fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.node}</span>
                         </div>
-                        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6,flexShrink:0}}>
-                          <span style={{fontSize:"0.6rem",color:"#334155"}}>{a.time}</span>
-                          {perms.canDeleteEntries&&<button onClick={()=>removeAlert(a.id)} style={{padding:"4px 8px",borderRadius:6,background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",color:"#ef4444",cursor:"pointer",fontSize:"0.58rem",display:"flex",alignItems:"center",gap:4}}><Trash2 size={9}/>Sil</button>}
-                        </div>
+                        <div style={{fontSize:"0.72rem",color:"#f1f5f9",fontWeight:700,marginBottom:3}}>{a.component}</div>
+                        <div style={{fontSize:"0.68rem",color:"#94a3b8"}}>{a.message}</div>
+                        {a.note&&<div style={{fontSize:"0.62rem",color:"#475569",marginTop:4,fontStyle:"italic"}}>Not: {a.note}</div>}
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6,flexShrink:0}}>
+                        <span style={{fontSize:"0.6rem",color:"#334155"}}>{a.time}</span>
+                        {perms.canDeleteEntries&&<button onClick={()=>removeAlert(a.id)} style={{padding:"4px 8px",borderRadius:6,background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",color:"#ef4444",cursor:"pointer",fontSize:"0.58rem",display:"flex",alignItems:"center",gap:4}}><Trash2 size={9}/>Sil</button>}
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-            <div style={card()}>
-              <ManualIncidentPanel perms={perms} onAddAlert={addAlert}/>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
 
+        {/* MESSAGES TAB */}
         {activeTab==="messages"&&(
           <div style={card()}>
-            <MessagingPanel currentUser={currentUser} users={users} messages={messages} onSend={handleSendMsg} perms={perms}/>
+            <MessagingPanel currentUser={currentUser} users={users} messages={messages} onSend={() => {}} perms={perms}/>
           </div>
         )}
-
-        {activeTab==="admin"&&perms.canSeeAdminTab&&(
-          <div style={card()}>
-            <AdminPanel currentUser={currentUser} users={users} setUsers={setUsers} pending={pending} setPending={setPending} activityLog={activityLog} setActivityLog={setActLog} perms={perms}/>
-          </div>
-        )}
-
       </main>
-
-      {stratModal&&<StrategyModal onClose={()=>setStratModal(false)} onSave={saveStrategy}/>}
     </div>
   );
 }
