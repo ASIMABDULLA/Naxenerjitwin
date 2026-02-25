@@ -17,7 +17,7 @@ import {
   Crown, LogOut, UserCog, ShieldCheck, ShieldOff,
   Star, MapPinned, History, Edit3, Database, Send,
   MessageSquare, Bell, BellRing, Inbox, MessageCircle, ArrowLeft, AtSign, Reply,
-  PenLine, Settings2
+  PenLine, Settings2, Circle, CheckCheck
 } from "lucide-react";
 
 // ============================================================
@@ -27,6 +27,9 @@ const SUPABASE_URL = "https://psvobvcuczallzmyqnjm.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzdm9idmN1Y3phbGx6bXlxbmptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE3NTEwNzAsImV4cCI6MjA4NzMyNzA3MH0.94u6a0xpU3mNei4BsBxzWYIP2TDmHfP6TaXmETgp3zY";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// ============================================================
+// CONSTANTS
+// ============================================================
 const NODES = [
   { id:"naxModul",     label:"Naxçıvan Modul Elektrik Stansiyası",  region:"Naxçıvan Şəhər",  type:"thermal",  icon:Zap,         color:"#f97316", sensors:{boilerTemp:420,steamPressure:14.2,output:82.1},     deltas:{boilerTemp:[2,0.5],steamPressure:[0.2,0.5],output:[0.8,0.5]} },
   { id:"arazHydro",    label:"Araz Su Elektrik Stansiyası",          region:"Ordubad Rayonu",  type:"hydro",    icon:Droplets,    color:"#0ea5e9", sensors:{waterLevel:22.4,turbineRpm:980,output:19.8},         deltas:{waterLevel:[0.1,0.5],turbineRpm:[15,0.5],output:[0.4,0.5]} },
@@ -87,7 +90,7 @@ const TOTAL_CAPACITY = ENERGY_SOURCES.reduce((s,e) => s + e.cap, 0);
 
 function normalizeRole(role) {
   if (!role) return "viewer";
-  const map = { observer: "viewer", viewer: "viewer", operator: "operator", admin: "admin", vice_admin: "vice_admin" };
+  const map = { observer:"viewer", viewer:"viewer", operator:"operator", admin:"admin", vice_admin:"vice_admin" };
   return map[role] || "viewer";
 }
 
@@ -253,19 +256,11 @@ function EnergyChart({ data }) {
               <span style={{fontSize:"0.72rem",fontWeight:800,color:p.color}}>{p.value} MW</span>
             </div>
           ))}
-          {payload.length===2&&(
-            <div style={{fontSize:"0.62rem",color:"#334155",marginTop:6,paddingTop:6,borderTop:"1px solid rgba(255,255,255,0.05)"}}>
-              Balans: <span style={{color: payload[0].value >= payload[1].value ? "#10b981":"#ef4444", fontWeight:700}}>
-                {(payload[0].value - payload[1].value).toFixed(1)} MW
-              </span>
-            </div>
-          )}
         </div>
       );
     }
     return null;
   };
-
   return (
     <div style={{position:"relative"}}>
       <div style={{display:"flex",gap:16,marginBottom:14}}>
@@ -275,10 +270,6 @@ function EnergyChart({ data }) {
             <span style={{fontSize:"0.62rem",color:"#64748b"}}>{lbl}</span>
           </div>
         ))}
-        <div style={{marginLeft:"auto",fontSize:"0.62rem",color:"#334155",display:"flex",alignItems:"center",gap:4}}>
-          <div style={{width:6,height:6,borderRadius:"50%",background:"#10b981"}}/>
-          Real vaxt
-        </div>
       </div>
       <ResponsiveContainer width="100%" height={200}>
         <AreaChart data={data} margin={{top:8,right:8,bottom:0,left:0}}>
@@ -293,8 +284,8 @@ function EnergyChart({ data }) {
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="2 6" stroke="rgba(148,163,184,0.06)" horizontal={true} vertical={false}/>
-          <XAxis dataKey="t" tick={{fontSize:10,fill:"#475569",fontFamily:"inherit"}} axisLine={{stroke:"rgba(255,255,255,0.06)"}} tickLine={false} dy={6}/>
-          <YAxis tick={{fontSize:10,fill:"#475569",fontFamily:"inherit"}} axisLine={false} tickLine={false} width={32}/>
+          <XAxis dataKey="t" tick={{fontSize:10,fill:"#475569"}} axisLine={{stroke:"rgba(255,255,255,0.06)"}} tickLine={false} dy={6}/>
+          <YAxis tick={{fontSize:10,fill:"#475569"}} axisLine={false} tickLine={false} width={32}/>
           <Tooltip content={<CustomTooltip/>}/>
           <Area type="monotoneX" dataKey="i" stroke="#38bdf8" strokeWidth={2} fill="url(#gradI)" name="İstehsal" activeDot={{r:5,fill:"#38bdf8",stroke:"rgba(4,8,20,0.8)",strokeWidth:2}}/>
           <Area type="monotoneX" dataKey="p" stroke="#f59e0b" strokeWidth={2} fill="url(#gradP)" name="İstehlak" activeDot={{r:5,fill:"#f59e0b",stroke:"rgba(4,8,20,0.8)",strokeWidth:2}}/>
@@ -304,58 +295,63 @@ function EnergyChart({ data }) {
   );
 }
 
-// ✅ SUPABASE SYNC: Messages + Real-time
-function useSupabaseMessages() {
+// ============================================================
+// ✅ SUPABASE MESSAGES HOOK — tam inteqrasiyalı
+// ============================================================
+function useSupabaseMessages(currentUserId) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // DB sətirini app-modelinə çevir
+  const mapRow = (r) => ({
+    id:         r.id,
+    fromId:     r.from_id,
+    fromName:   r.from_name,
+    fromAvatar: r.from_avatar || "??",
+    fromRole:   r.from_role   || "viewer",
+    toId:       r.to_id,
+    toName:     r.to_name     || "Hamı",
+    subject:    r.subject,
+    body:       r.body,
+    timestamp:  r.created_at,
+    readBy:     Array.isArray(r.read_by) ? r.read_by : [],
+    priority:   r.priority    || "normal",
+    type:       r.type        || "direct",
+  });
+
+  // İlk yükləmə
   useEffect(() => {
-    const loadMessages = async () => {
+    const load = async () => {
       const { data, error } = await supabase
-        .from('messages')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (!error && data) {
-        setMessages(data.map(m => ({
-          id: m.id,
-          fromId: m.from_id,
-          fromName: m.from_name,
-          fromAvatar: m.from_avatar || "??",
-          fromRole: m.from_role || "viewer",
-          toId: m.to_id,
-          toName: m.to_name || "Hamı",
-          subject: m.subject,
-          body: m.body,
-          timestamp: m.created_at,
-          readBy: m.read_by || [],
-          priority: m.priority || "normal",
-          type: m.type || "direct"
-        })));
-      }
+        .from("messages")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (!error && data) setMessages(data.map(mapRow));
       setLoading(false);
     };
-    loadMessages();
+    load();
+  }, []);
 
+  // Real-time: INSERT + UPDATE
+  useEffect(() => {
     const channel = supabase
-      .channel('messages-sync')
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages' },
+      .channel("messages-realtime")
+      .on("postgres_changes",
+        { event: "INSERT", schema: "public", table: "messages" },
         (payload) => {
-          setMessages(prev => [{
-            id: payload.new.id,
-            fromId: payload.new.from_id,
-            fromName: payload.new.from_name,
-            fromAvatar: payload.new.from_avatar || "??",
-            fromRole: payload.new.from_role || "viewer",
-            toId: payload.new.to_id,
-            toName: payload.new.to_name || "Hamı",
-            subject: payload.new.subject,
-            body: payload.new.body,
-            timestamp: payload.new.created_at,
-            readBy: payload.new.read_by || [],
-            priority: payload.new.priority || "normal",
-            type: payload.new.type || "direct"
-          }, ...prev]);
+          setMessages(prev => {
+            // Duplikat yoxlaması
+            if (prev.find(m => m.id === payload.new.id)) return prev;
+            return [mapRow(payload.new), ...prev];
+          });
+        }
+      )
+      .on("postgres_changes",
+        { event: "UPDATE", schema: "public", table: "messages" },
+        (payload) => {
+          setMessages(prev =>
+            prev.map(m => m.id === payload.new.id ? mapRow(payload.new) : m)
+          );
         }
       )
       .subscribe();
@@ -363,166 +359,530 @@ function useSupabaseMessages() {
     return () => supabase.removeChannel(channel);
   }, []);
 
-  return { messages, setMessages, loading };
+  // Mesajı oxunmuş say — read_by array-ni Supabase-də yenilə
+  const markAsRead = useCallback(async (messageId, userId) => {
+    if (!userId) return;
+    // Lokal state-i dərhal yenilə (optimistic update)
+    setMessages(prev =>
+      prev.map(m => {
+        if (m.id !== messageId) return m;
+        if (m.readBy.includes(userId)) return m;
+        return { ...m, readBy: [...m.readBy, userId] };
+      })
+    );
+    // DB-ni yenilə — mövcud read_by array-inə əlavə et
+    const { data: current } = await supabase
+      .from("messages")
+      .select("read_by")
+      .eq("id", messageId)
+      .single();
+
+    if (!current) return;
+    const existing = Array.isArray(current.read_by) ? current.read_by : [];
+    if (existing.includes(userId)) return;
+    await supabase
+      .from("messages")
+      .update({ read_by: [...existing, userId] })
+      .eq("id", messageId);
+  }, []);
+
+  // Yeni mesaj göndər
+  const sendMessage = useCallback(async ({ currentUser, recipientId, recipientName, subject, body, priority, isBroadcast }) => {
+    const payload = {
+      from_id:     currentUser.id,
+      from_name:   currentUser.name,
+      from_avatar: currentUser.avatar,
+      from_role:   currentUser.role,
+      to_id:       isBroadcast ? null : (recipientId || null),
+      to_name:     isBroadcast ? "Hamı" : (recipientName || ""),
+      subject,
+      body,
+      priority:    priority || "normal",
+      type:        isBroadcast ? "broadcast" : "direct",
+      read_by:     [currentUser.id],  // göndərən artıq oxuyub
+    };
+    const { error } = await supabase.from("messages").insert([payload]);
+    return { error };
+  }, []);
+
+  // Mesajı sil (yalnız admin)
+  const deleteMessage = useCallback(async (messageId) => {
+    const { error } = await supabase.from("messages").delete().eq("id", messageId);
+    if (!error) setMessages(prev => prev.filter(m => m.id !== messageId));
+    return { error };
+  }, []);
+
+  return { messages, loading, markAsRead, sendMessage, deleteMessage };
 }
 
-// ✅ SUPABASE SYNC: Alerts
+// ============================================================
+// ✅ MESSAGING PANEL — tam yenidən yazılmış
+// ============================================================
+function MessagingPanel({ currentUser, users, messages, loading, markAsRead, sendMessage, deleteMessage, perms }) {
+  const [tab, setTab] = useState("inbox");
+  const [compose, setCompose] = useState(false);
+  const [recipientId, setRecipientId] = useState("broadcast");
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [priority, setPriority] = useState("normal");
+  const [viewingId, setViewingId] = useState(null);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState("");
+  const [searchQ, setSearchQ] = useState("");
+
+  const inp = {
+    width:"100%",boxSizing:"border-box",
+    background:"linear-gradient(135deg,rgba(6,12,28,0.95),rgba(4,8,20,0.98))",
+    border:"1px solid rgba(56,189,248,0.18)",borderRadius:9,
+    padding:"9px 12px",color:"#e2e8f0",fontSize:"0.76rem",
+    fontFamily:"inherit",outline:"none"
+  };
+
+  // Bu istifadəçiyə aid mesajları filtrləmək
+  const isMyMessage = (msg) => {
+    if (tab === "inbox") {
+      return msg.toId === currentUser.id ||
+             (msg.type === "broadcast" && msg.fromId !== currentUser.id);
+    }
+    if (tab === "sent") return msg.fromId === currentUser.id;
+    return false;
+  };
+
+  const filteredMessages = messages
+    .filter(isMyMessage)
+    .filter(m => !searchQ || 
+      m.subject?.toLowerCase().includes(searchQ.toLowerCase()) ||
+      m.fromName?.toLowerCase().includes(searchQ.toLowerCase()) ||
+      m.body?.toLowerCase().includes(searchQ.toLowerCase())
+    );
+
+  const unreadCount = messages.filter(m =>
+    (m.toId === currentUser.id || (m.type === "broadcast" && m.fromId !== currentUser.id)) &&
+    !m.readBy.includes(currentUser.id)
+  ).length;
+
+  // Recipient seçenekler
+  const recipientOptions = [
+    ...(perms.canBroadcast
+      ? [{ value:"broadcast", label:"📢 Hər Kəs (Broadcast)", colorDot:"#f97316" }]
+      : []
+    ),
+    ...users
+      .filter(u => String(u.id) !== String(currentUser.id))
+      .map(u => ({
+        value: String(u.id),
+        label: u.name,
+        sub: ROLES_DEF.find(r => r.id === u.role)?.label || "",
+        colorDot: ROLES_DEF.find(r => r.id === u.role)?.color || "#64748b"
+      }))
+  ];
+
+  // Mesaj göndər
+  const handleSend = async () => {
+    if (!subject.trim() || !body.trim()) {
+      setSendError("Mövzu və mətn doldurulmalıdır.");
+      return;
+    }
+    setSending(true);
+    setSendError("");
+    const isBroadcast = recipientId === "broadcast";
+    const toUser = isBroadcast ? null : users.find(u => String(u.id) === recipientId);
+    const { error } = await sendMessage({
+      currentUser,
+      recipientId: toUser?.id ?? null,
+      recipientName: toUser?.name ?? "",
+      subject: subject.trim(),
+      body: body.trim(),
+      priority,
+      isBroadcast,
+    });
+    setSending(false);
+    if (error) {
+      setSendError("Göndərmə xətası: " + error.message);
+    } else {
+      setCompose(false);
+      setSubject("");
+      setBody("");
+      setRecipientId("broadcast");
+      setPriority("normal");
+      setTab("sent");
+    }
+  };
+
+  // Mesajı aç — oxunmuş işarələ
+  const openMessage = async (msg) => {
+    setViewingId(msg.id);
+    if (!msg.readBy.includes(currentUser.id)) {
+      await markAsRead(msg.id, currentUser.id);
+    }
+  };
+
+  // ── MESAJ GÖRÜNTÜLƏMƏ ──
+  if (viewingId !== null) {
+    const msg = messages.find(m => m.id === viewingId);
+    if (!msg) { setViewingId(null); return null; }
+
+    const senderRole = ROLES_DEF.find(r => r.id === msg.fromRole);
+    const isOwn = msg.fromId === currentUser.id;
+
+    return (
+      <div style={{animation:"fadeIn 0.2s ease"}}>
+        {/* Başlıq */}
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
+          <button
+            onClick={() => setViewingId(null)}
+            style={{display:"flex",alignItems:"center",gap:5,background:"rgba(56,189,248,0.06)",border:"1px solid rgba(56,189,248,0.15)",borderRadius:8,padding:"6px 12px",color:"#38bdf8",cursor:"pointer",fontSize:"0.7rem",fontWeight:700}}
+          >
+            <ArrowLeft size={12}/> Geri
+          </button>
+          <span style={{fontSize:"0.65rem",color:"#334155"}}>{relTime(msg.timestamp)}</span>
+          {msg.priority === "high" && (
+            <span style={{fontSize:"0.58rem",color:"#ef4444",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:4,padding:"2px 8px",fontWeight:800,marginLeft:"auto"}}>
+              🔴 TƏCİLİ
+            </span>
+          )}
+          {perms.isAdmin && !isOwn && (
+            <button
+              onClick={async () => { await deleteMessage(msg.id); setViewingId(null); }}
+              style={{padding:"5px 10px",borderRadius:7,background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",color:"#ef4444",cursor:"pointer",fontSize:"0.62rem",display:"flex",alignItems:"center",gap:4}}
+            >
+              <Trash2 size={10}/> Sil
+            </button>
+          )}
+        </div>
+
+        {/* Mesaj kartı */}
+        <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(56,189,248,0.12)",borderRadius:14,overflow:"hidden"}}>
+          {/* Meta */}
+          <div style={{padding:"16px 20px",borderBottom:"1px solid rgba(56,189,248,0.08)",background:"rgba(56,189,248,0.03)"}}>
+            <h2 style={{color:"#f1f5f9",fontSize:"0.95rem",fontWeight:900,margin:"0 0 12px"}}>{msg.subject}</h2>
+            <div style={{display:"flex",flexWrap:"wrap",gap:12,alignItems:"center"}}>
+              {/* Göndərən */}
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:28,height:28,borderRadius:8,background:`${senderRole?.color||"#64748b"}20`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.58rem",fontWeight:900,color:senderRole?.color||"#64748b"}}>
+                  {msg.fromAvatar || "??"}
+                </div>
+                <div>
+                  <div style={{fontSize:"0.68rem",color:"#e2e8f0",fontWeight:700}}>{msg.fromName}</div>
+                  <RoleBadge role={msg.fromRole} size="xs"/>
+                </div>
+              </div>
+              <div style={{color:"#334155",fontSize:"0.7rem"}}>→</div>
+              {/* Alıcı */}
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                {msg.type === "broadcast"
+                  ? <span style={{fontSize:"0.68rem",color:"#f97316",fontWeight:700,display:"flex",alignItems:"center",gap:4}}><Radio size={11}/>Hamıya göndərilib</span>
+                  : <span style={{fontSize:"0.68rem",color:"#94a3b8"}}>{msg.toName || "—"}</span>
+                }
+              </div>
+              {/* Oxuyanlar */}
+              <div style={{marginLeft:"auto",fontSize:"0.6rem",color:"#334155",display:"flex",alignItems:"center",gap:4}}>
+                <CheckCheck size={11} style={{color:"#10b981"}}/>
+                {msg.readBy.length} nəfər oxuyub
+              </div>
+            </div>
+          </div>
+          {/* Mətn */}
+          <div style={{padding:"20px"}}>
+            <p style={{fontSize:"0.8rem",lineHeight:1.75,color:"#cbd5e1",whiteSpace:"pre-wrap",margin:0}}>{msg.body}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── YENİ MESAJ ──
+  if (compose) {
+    return (
+      <div style={{animation:"fadeIn 0.2s ease"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
+          <button
+            onClick={() => { setCompose(false); setSendError(""); }}
+            style={{display:"flex",alignItems:"center",gap:5,background:"rgba(56,189,248,0.06)",border:"1px solid rgba(56,189,248,0.15)",borderRadius:8,padding:"6px 12px",color:"#38bdf8",cursor:"pointer",fontSize:"0.7rem",fontWeight:700}}
+          >
+            <ArrowLeft size={12}/> Geri
+          </button>
+          <h3 style={{color:"#f1f5f9",fontSize:"0.85rem",fontWeight:800,margin:0}}>Yeni Mesaj</h3>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <DarkSelect value={recipientId} onChange={setRecipientId} options={recipientOptions} placeholder="Alıcı seçin"/>
+          <input
+            placeholder="Mövzu"
+            value={subject}
+            onChange={e => setSubject(e.target.value)}
+            style={inp}
+          />
+          <textarea
+            placeholder="Mesaj mətni..."
+            value={body}
+            onChange={e => setBody(e.target.value)}
+            rows={7}
+            style={{...inp, resize:"vertical", lineHeight:1.6}}
+          />
+          <DarkSelect
+            value={priority}
+            onChange={setPriority}
+            options={[
+              {value:"normal", label:"Normal Prioritet", colorDot:"#10b981"},
+              {value:"high",   label:"Təcili",           colorDot:"#ef4444"}
+            ]}
+          />
+          {sendError && (
+            <div style={{background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:8,padding:"8px 12px",fontSize:"0.7rem",color:"#fca5a5"}}>
+              {sendError}
+            </div>
+          )}
+          <button
+            onClick={handleSend}
+            disabled={sending}
+            style={{padding:"11px",borderRadius:10,background:sending?"rgba(56,189,248,0.05)":"linear-gradient(135deg,rgba(56,189,248,0.18),rgba(14,165,233,0.1))",border:"1px solid rgba(56,189,248,0.35)",color:"#38bdf8",fontWeight:800,fontSize:"0.78rem",cursor:sending?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:sending?0.6:1,transition:"all 0.2s"}}
+          >
+            {sending
+              ? <><RefreshCw size={13} style={{animation:"spin 1s linear infinite"}}/> Göndərilir...</>
+              : <><Send size={13}/> Göndər</>
+            }
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── MESAJ SİYAHISI ──
+  return (
+    <div>
+      {/* Başlıq */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <MessageSquare size={15} style={{color:"#38bdf8"}}/>
+          <h3 style={{color:"#f1f5f9",fontSize:"0.88rem",fontWeight:900,margin:0}}>Mesajlar</h3>
+          {unreadCount > 0 && (
+            <span style={{background:"#ef4444",color:"#fff",fontSize:"0.55rem",borderRadius:10,padding:"2px 7px",fontWeight:900,animation:"pulse 2s infinite"}}>
+              {unreadCount} yeni
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => { setCompose(true); setSendError(""); }}
+          style={{padding:"7px 14px",borderRadius:9,background:"linear-gradient(135deg,rgba(56,189,248,0.15),rgba(14,165,233,0.08))",border:"1px solid rgba(56,189,248,0.3)",color:"#38bdf8",fontSize:"0.68rem",fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}
+        >
+          <Plus size={12}/> Yeni Mesaj
+        </button>
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",gap:6,marginBottom:14}}>
+        {[
+          { k:"inbox", l:"Gələnlər",       Icon:Inbox, count: unreadCount },
+          { k:"sent",  l:"Göndərilənlər", Icon:Send,  count: 0           }
+        ].map(({ k, l, Icon, count }) => (
+          <button
+            key={k}
+            onClick={() => { setTab(k); setSearchQ(""); }}
+            style={{flex:1,padding:"8px",borderRadius:9,border:`1px solid ${tab===k?"rgba(56,189,248,0.4)":"rgba(56,189,248,0.1)"}`,background:tab===k?"rgba(56,189,248,0.1)":"transparent",color:tab===k?"#38bdf8":"#475569",cursor:"pointer",fontSize:"0.68rem",fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:6,transition:"all 0.2s"}}
+          >
+            <Icon size={12}/>{l}
+            {count > 0 && tab !== k && (
+              <span style={{background:"#ef4444",color:"#fff",fontSize:"0.5rem",borderRadius:"50%",width:15,height:15,display:"inline-flex",alignItems:"center",justifyContent:"center",fontWeight:900}}>
+                {count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Axtarış */}
+      <div style={{position:"relative",marginBottom:12}}>
+        <input
+          placeholder="Axtarış..."
+          value={searchQ}
+          onChange={e => setSearchQ(e.target.value)}
+          style={{...inp, paddingLeft:32, fontSize:"0.72rem"}}
+        />
+        <Activity size={12} style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)",color:"#334155"}}/>
+        {searchQ && (
+          <button onClick={() => setSearchQ("")} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"#475569",cursor:"pointer",display:"flex",alignItems:"center"}}>
+            <X size={12}/>
+          </button>
+        )}
+      </div>
+
+      {/* Mesaj Listesi */}
+      {loading ? (
+        <div style={{textAlign:"center",padding:"32px 0",color:"#334155",fontSize:"0.72rem",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+          <RefreshCw size={14} style={{animation:"spin 1s linear infinite",color:"#38bdf8"}}/> Yüklənir...
+        </div>
+      ) : filteredMessages.length === 0 ? (
+        <div style={{textAlign:"center",padding:"40px 0"}}>
+          <Inbox size={28} style={{color:"#1e293b",marginBottom:10}}/>
+          <div style={{color:"#334155",fontSize:"0.72rem"}}>
+            {searchQ ? "Axtarışa uyğun mesaj tapılmadı" : "Mesaj yoxdur"}
+          </div>
+        </div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          {filteredMessages.map(msg => {
+            const isUnread = tab === "inbox" && !msg.readBy.includes(currentUser.id);
+            const isBroadcast = msg.type === "broadcast";
+            const senderRoleDef = ROLES_DEF.find(r => r.id === msg.fromRole);
+
+            return (
+              <div
+                key={msg.id}
+                onClick={() => openMessage(msg)}
+                style={{
+                  background: isUnread
+                    ? "linear-gradient(135deg,rgba(56,189,248,0.07),rgba(14,165,233,0.03))"
+                    : "rgba(255,255,255,0.02)",
+                  border: `1px solid ${isUnread ? "rgba(56,189,248,0.22)" : "rgba(56,189,248,0.08)"}`,
+                  borderRadius:11,padding:"11px 14px",cursor:"pointer",
+                  transition:"all 0.18s",position:"relative",overflow:"hidden"
+                }}
+                onMouseEnter={e => e.currentTarget.style.borderColor = "rgba(56,189,248,0.3)"}
+                onMouseLeave={e => e.currentTarget.style.borderColor = isUnread ? "rgba(56,189,248,0.22)" : "rgba(56,189,248,0.08)"}
+              >
+                {/* Oxunmamış indicator */}
+                {isUnread && (
+                  <div style={{position:"absolute",left:0,top:0,bottom:0,width:3,background:"linear-gradient(to bottom,#38bdf8,#0ea5e9)",borderRadius:"11px 0 0 11px"}}/>
+                )}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,marginBottom:5}}>
+                  <div style={{display:"flex",alignItems:"center",gap:7,flex:1,minWidth:0}}>
+                    {/* Avatar */}
+                    <div style={{width:24,height:24,borderRadius:7,background:`${senderRoleDef?.color||"#64748b"}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.55rem",fontWeight:900,color:senderRoleDef?.color||"#64748b",flexShrink:0}}>
+                      {msg.fromAvatar || "??"}
+                    </div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+                        <span style={{fontSize:"0.72rem",fontWeight:isUnread?800:600,color:isUnread?"#f1f5f9":"#94a3b8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          {msg.subject}
+                        </span>
+                        {msg.priority === "high" && (
+                          <span style={{fontSize:"0.52rem",color:"#ef4444",background:"rgba(239,68,68,0.12)",borderRadius:3,padding:"1px 5px",fontWeight:800,flexShrink:0}}>TƏCİLİ</span>
+                        )}
+                        {isBroadcast && (
+                          <span style={{fontSize:"0.52rem",color:"#f97316",background:"rgba(249,115,22,0.1)",borderRadius:3,padding:"1px 5px",fontWeight:700,flexShrink:0,display:"flex",alignItems:"center",gap:3}}>
+                            <Radio size={8}/> BROADCAST
+                          </span>
+                        )}
+                      </div>
+                      <div style={{fontSize:"0.62rem",color:"#475569",display:"flex",alignItems:"center",gap:5}}>
+                        {tab === "inbox"
+                          ? <><span style={{color:senderRoleDef?.color||"#64748b",fontWeight:600}}>{msg.fromName}</span><span>→</span><span>{msg.toName || "Hamı"}</span></>
+                          : <><span>→</span><span style={{color:"#94a3b8"}}>{msg.toName || "Hamı"}</span></>
+                        }
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
+                    <span style={{fontSize:"0.6rem",color:"#334155"}}>{relTime(msg.timestamp)}</span>
+                    {msg.readBy.length > 1 && (
+                      <span style={{fontSize:"0.55rem",color:"#10b981",display:"flex",alignItems:"center",gap:3}}>
+                        <CheckCheck size={9}/>{msg.readBy.length}
+                      </span>
+                    )}
+                    {isUnread && (
+                      <div style={{width:7,height:7,borderRadius:"50%",background:"#38bdf8",boxShadow:"0 0 6px #38bdf880"}}/>
+                    )}
+                  </div>
+                </div>
+                {/* Önizleme */}
+                <div style={{fontSize:"0.64rem",color:"#334155",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginLeft:31}}>
+                  {msg.body}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// OTHER SUPABASE HOOKS (dəyişməyib)
+// ============================================================
 function useSupabaseAlerts() {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
-
   useEffect(() => {
-    const loadAlerts = async () => {
-      const { data, error } = await supabase
-        .from('alerts')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (!error && data) {
-        setAlerts(data.map(a => ({
-          id: a.id,
-          node: a.station_name,
-          component: a.component,
-          severity: a.severity,
-          message: a.message,
-          time: a.created_at ? new Date(a.created_at).toLocaleTimeString('az-AZ') : new Date().toLocaleTimeString('az-AZ'),
-          note: a.note || ""
-        })));
-      }
+    const load = async () => {
+      const { data, error } = await supabase.from('alerts').select('*').order('created_at', { ascending: false });
+      if (!error && data) setAlerts(data.map(a => ({
+        id: a.id, node: a.station_name, component: a.component,
+        severity: a.severity, message: a.message,
+        time: a.created_at ? new Date(a.created_at).toLocaleTimeString('az-AZ') : new Date().toLocaleTimeString('az-AZ'),
+        note: a.note || ""
+      })));
       setLoading(false);
     };
-    loadAlerts();
-
-    const channel = supabase
-      .channel('alerts-sync')
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'alerts' },
-        (payload) => {
-          setAlerts(prev => [{
-            id: payload.new.id,
-            node: payload.new.station_name,
-            component: payload.new.component,
-            severity: payload.new.severity,
-            message: payload.new.message,
-            time: new Date(payload.new.created_at).toLocaleTimeString('az-AZ'),
-            note: payload.new.note || ""
-          }, ...prev]);
-        }
-      )
-      .subscribe();
-
-    return () => supabase.removeChannel(channel);
+    load();
+    const ch = supabase.channel('alerts-sync')
+      .on('postgres_changes', { event:'INSERT', schema:'public', table:'alerts' }, (p) => {
+        setAlerts(prev => [{
+          id:p.new.id, node:p.new.station_name, component:p.new.component,
+          severity:p.new.severity, message:p.new.message,
+          time:new Date(p.new.created_at).toLocaleTimeString('az-AZ'), note:p.new.note||""
+        }, ...prev]);
+      }).subscribe();
+    return () => supabase.removeChannel(ch);
   }, []);
-
   return { alerts, setAlerts, loading };
 }
 
-// ✅ SUPABASE SYNC: Data Entries
 function useSupabaseDataEntries() {
   const [dataEntries, setDataEntries] = useState([]);
   const [loading, setLoading] = useState(true);
-
   useEffect(() => {
-    const loadEntries = async () => {
-      const { data, error } = await supabase
-        .from('data_entries')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (!error && data) {
-        setDataEntries(data.map(e => ({
-          id: e.id,
-          timestamp: e.created_at,
-          actor: e.actor_name,
-          actorRole: e.actor_role,
-          targetType: e.target_type,
-          target: e.target_name,
-          field: e.field_name,
-          value: e.value,
-          note: e.note || "",
-          color: e.color || "#38bdf8"
-        })));
-      }
+    const load = async () => {
+      const { data, error } = await supabase.from('data_entries').select('*').order('created_at', { ascending: false });
+      if (!error && data) setDataEntries(data.map(e => ({
+        id:e.id, timestamp:e.created_at, actor:e.actor_name, actorRole:e.actor_role,
+        targetType:e.target_type, target:e.target_name, field:e.field_name,
+        value:e.value, note:e.note||"", color:e.color||"#38bdf8"
+      })));
       setLoading(false);
     };
-    loadEntries();
-
-    const channel = supabase
-      .channel('data-entries-sync')
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'data_entries' },
-        (payload) => {
-          setDataEntries(prev => [{
-            id: payload.new.id,
-            timestamp: payload.new.created_at,
-            actor: payload.new.actor_name,
-            actorRole: payload.new.actor_role,
-            targetType: payload.new.target_type,
-            target: payload.new.target_name,
-            field: payload.new.field_name,
-            value: payload.new.value,
-            note: payload.new.note || "",
-            color: payload.new.color || "#38bdf8"
-          }, ...prev]);
-        }
-      )
-      .subscribe();
-
-    return () => supabase.removeChannel(channel);
+    load();
+    const ch = supabase.channel('data-entries-sync')
+      .on('postgres_changes', { event:'INSERT', schema:'public', table:'data_entries' }, (p) => {
+        setDataEntries(prev => [{
+          id:p.new.id, timestamp:p.new.created_at, actor:p.new.actor_name, actorRole:p.new.actor_role,
+          targetType:p.new.target_type, target:p.new.target_name, field:p.new.field_name,
+          value:p.new.value, note:p.new.note||"", color:p.new.color||"#38bdf8"
+        }, ...prev]);
+      }).subscribe();
+    return () => supabase.removeChannel(ch);
   }, []);
-
   return { dataEntries, setDataEntries, loading };
 }
 
-// ✅ SUPABASE SYNC: Strategies
 function useSupabaseStrategies() {
   const [strategies, setStrategies] = useState([]);
   const [loading, setLoading] = useState(true);
-
   useEffect(() => {
-    const loadStrategies = async () => {
-      const { data, error } = await supabase
-        .from('strategies')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (!error && data) {
-        setStrategies(data.map(s => ({
-          id: s.id,
-          title: s.title,
-          category: s.category,
-          categoryColor: s.category_color || "#3b82f6",
-          desc: s.description,
-          roi: s.roi,
-          duration: s.duration,
-          annualSavings: s.annual_savings || "",
-          impact: s.impact || "",
-          priority: s.priority || "Orta",
-          priorityColor: s.priority_color || "#f59e0b",
-          status: s.status || "Planlaşdırılıb",
-          statusColor: s.status_color || "#f59e0b",
-          energySaved: s.energy_saved || "",
-          co2Reduction: s.co2_reduction || "",
-          progress: s.progress || 0,
-          completed: s.completed || false
-        })));
-      }
+    const load = async () => {
+      const { data, error } = await supabase.from('strategies').select('*').order('created_at', { ascending: false });
+      if (!error && data) setStrategies(data.map(s => ({
+        id:s.id, title:s.title, category:s.category, categoryColor:s.category_color||"#3b82f6",
+        desc:s.description, roi:s.roi, duration:s.duration, annualSavings:s.annual_savings||"",
+        impact:s.impact||"", priority:s.priority||"Orta", priorityColor:s.priority_color||"#f59e0b",
+        status:s.status||"Planlaşdırılıb", statusColor:s.status_color||"#f59e0b",
+        energySaved:s.energy_saved||"", co2Reduction:s.co2_reduction||"",
+        progress:s.progress||0, completed:s.completed||false
+      })));
       setLoading(false);
     };
-    loadStrategies();
-
-    const channel = supabase
-      .channel('strategies-sync')
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'strategies' },
-        () => { loadStrategies(); }
-      )
+    load();
+    const ch = supabase.channel('strategies-sync')
+      .on('postgres_changes', { event:'*', schema:'public', table:'strategies' }, () => load())
       .subscribe();
-
-    return () => supabase.removeChannel(channel);
+    return () => supabase.removeChannel(ch);
   }, []);
-
   return { strategies, setStrategies, loading };
 }
 
-// ✅ MANUAL DATA ENTRY PANEL
+// ============================================================
+// MANUAL DATA ENTRY PANEL
+// ============================================================
 function ManualDataEntryPanel({ currentUser, perms, sensors, setSensorOverrides, dataEntries, setDataEntries }) {
   const [targetType, setTargetType] = useState("station");
   const [selectedStation, setStation] = useState("");
@@ -535,31 +895,15 @@ function ManualDataEntryPanel({ currentUser, perms, sensors, setSensorOverrides,
 
   const userArea = currentUser?.serviceArea || "";
   const isAllAccess = userArea === "Bütün Ərazilər" || perms.isAdmin || perms.isViceAdmin;
-
-  const accessibleStations = NODES.filter(n => {
-    if (isAllAccess) return true;
-    return n.label === userArea || n.region === userArea;
-  });
-
-  const accessibleZones = DIST_ZONES.filter(z => {
-    if (isAllAccess) return true;
-    return z.name === userArea || userArea.includes(z.name) || z.name.includes(userArea.replace(" Rayonu","").replace(" Şəhər",""));
-  });
-
+  const accessibleStations = NODES.filter(n => isAllAccess ? true : (n.label === userArea || n.region === userArea));
+  const accessibleZones = DIST_ZONES.filter(z => isAllAccess ? true : (z.name === userArea || userArea.includes(z.name) || z.name.includes(userArea.replace(" Rayonu","").replace(" Şəhər",""))));
   const stationOpts = accessibleStations.map(n=>({value:n.id, label:n.label, colorDot:n.color}));
   const zoneOpts = accessibleZones.map(z=>({value:z.name, label:z.name, colorDot:"#38bdf8"}));
-
   const selectedNode = NODES.find(n=>n.id===selectedStation);
-  const sensorLabels = {
-    boilerTemp:"Qazan Temperaturu (°C)",steamPressure:"Buxar Təzyiqi (MPa)",output:"Çıxış Gücü (MW)",
-    waterLevel:"Su Səviyyəsi (m)",turbineRpm:"Türbin RPM",panelTemp:"Panel Temperaturu (°C)",
-    efficiency:"Səmərəlilik (%)",rpm:"Fırlanma (RPM)",bearingTemp:"Yataq Temperaturu (°C)",vibration:"Vibrasiya (mm/s)"
-  };
+  const sensorLabels = {boilerTemp:"Qazan Temp (°C)",steamPressure:"Buxar Təzyiqi (MPa)",output:"Çıxış Gücü (MW)",waterLevel:"Su Səviyyəsi (m)",turbineRpm:"Türbin RPM",panelTemp:"Panel Temp (°C)",efficiency:"Səmərəlilik (%)",rpm:"Fırlanma (RPM)",bearingTemp:"Yataq Temp (°C)",vibration:"Vibrasiya (mm/s)"};
   const zoneFieldLabels = { load:"Yük (MW)", capacity:"Güc (MW)", health:"Sağlamlıq (%)" };
-
   const stationFieldOpts = selectedNode ? Object.keys(selectedNode.sensors).map(k=>({value:k, label:sensorLabels[k]||k})) : [];
   const zoneFieldOpts = Object.entries(zoneFieldLabels).map(([k,v])=>({value:k, label:v}));
-
   const inp = {width:"100%",boxSizing:"border-box",background:"linear-gradient(135deg,rgba(6,12,28,0.95),rgba(4,8,20,0.98))",border:"1px solid rgba(56,189,248,0.18)",borderRadius:9,padding:"9px 12px",color:"#e2e8f0",fontSize:"0.76rem",fontFamily:"inherit",outline:"none"};
 
   const handleSubmit = async () => {
@@ -568,28 +912,15 @@ function ManualDataEntryPanel({ currentUser, perms, sensors, setSensorOverrides,
     if (targetType==="grid" && (!selectedZone || !fieldKey || fieldValue==="")) { setError("Zonu, sahəni və dəyəri doldurun."); return; }
     const numVal = parseFloat(fieldValue);
     if (isNaN(numVal)) { setError("Dəyər rəqəm olmalıdır."); return; }
-    
-    if (targetType==="station") { 
-      setSensorOverrides(prev => ({...prev,[selectedStation]:{...(prev[selectedStation]||{}),[fieldKey]:numVal}})); 
-    }
-    
+    if (targetType==="station") setSensorOverrides(prev => ({...prev,[selectedStation]:{...(prev[selectedStation]||{}),[fieldKey]:numVal}}));
     const label = targetType==="station" ? NODES.find(n=>n.id===selectedStation)?.label : selectedZone;
     const fLabel = targetType==="station" ? (sensorLabels[fieldKey]||fieldKey) : (zoneFieldLabels[fieldKey]||fieldKey);
-    
-    // ✅ Supabase-ə əlavə et
     const { error: insertError } = await supabase.from('data_entries').insert([{
-      actor_name: currentUser.name,
-      actor_role: currentUser.role,
-      target_type: targetType,
-      target_name: label,
-      field_name: fLabel,
-      value: numVal,
-      note: note,
-      color: targetType==="station"?(NODES.find(n=>n.id===selectedStation)?.color||"#38bdf8"):"#38bdf8"
+      actor_name:currentUser.name, actor_role:currentUser.role, target_type:targetType,
+      target_name:label, field_name:fLabel, value:numVal, note:note,
+      color:targetType==="station"?(NODES.find(n=>n.id===selectedStation)?.color||"#38bdf8"):"#38bdf8"
     }]);
-
     if (insertError) { setError("Məlumat qeydə alınmadı: " + insertError.message); return; }
-    
     setFieldValue(""); setNote(""); setSaved(true); setTimeout(()=>setSaved(false), 2500);
   };
 
@@ -601,7 +932,6 @@ function ManualDataEntryPanel({ currentUser, perms, sensors, setSensorOverrides,
         <PenLine size={16} style={{color:"#38bdf8"}}/>
         <h3 style={{color:"#f1f5f9",fontSize:"0.85rem",fontWeight:800,margin:0}}>Manuel Məlumat Daxiletmə</h3>
       </div>
-      {!isAllAccess && (<div style={{background:"rgba(56,189,248,0.06)",border:"1px solid rgba(56,189,248,0.15)",borderRadius:8,padding:"8px 12px",marginBottom:14,fontSize:"0.66rem",color:"#7dd3fc",display:"flex",alignItems:"center",gap:6}}><Shield size={11}/> Xidmət sahəniz: <strong>{userArea}</strong></div>)}
       {saved&&<div style={{background:"rgba(16,185,129,0.1)",border:"1px solid rgba(16,185,129,0.25)",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:"0.72rem",color:"#34d399",display:"flex",alignItems:"center",gap:6}}><CheckCircle size={12}/> Məlumat uğurla qeydə alındı</div>}
       {error&&<div style={{background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:"0.7rem",color:"#fca5a5"}}>{error}</div>}
       <div style={{display:"flex",gap:6,marginBottom:14}}>
@@ -612,7 +942,7 @@ function ManualDataEntryPanel({ currentUser, perms, sensors, setSensorOverrides,
         ))}
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:10}}>
-        {targetType==="station" ? (
+        {targetType==="station"?(
           <><DarkSelect value={selectedStation} onChange={(v)=>{setStation(v);setFieldKey("");}} options={stationOpts} placeholder="Stansiyanı seçin"/>
           {selectedStation&&<DarkSelect value={fieldKey} onChange={setFieldKey} options={stationFieldOpts} placeholder="Sensor sahəsini seçin"/>}</>
         ):(
@@ -627,29 +957,13 @@ function ManualDataEntryPanel({ currentUser, perms, sensors, setSensorOverrides,
           </button>
         </>)}
       </div>
-      {dataEntries.length > 0 && (
-        <div style={{marginTop:18}}>
-          <div style={{fontSize:"0.65rem",color:"#475569",fontWeight:700,marginBottom:10,display:"flex",alignItems:"center",gap:6}}><ClipboardList size={11}/> SON DƏYİŞİKLİKLƏR</div>
-          <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight:220,overflowY:"auto"}}>
-            {dataEntries.slice(0,10).map(e=>(
-              <div key={e.id} style={{display:"flex",gap:8,alignItems:"flex-start",padding:"8px 10px",background:"rgba(255,255,255,0.02)",borderRadius:8,border:`1px solid ${e.color}18`}}>
-                <div style={{width:7,height:7,borderRadius:"50%",background:e.color,marginTop:5,flexShrink:0}}/>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:"0.65rem",color:"#94a3b8"}}><span style={{color:"#e2e8f0",fontWeight:700}}>{e.target}</span> · {e.field}</div>
-                  <div style={{fontSize:"0.7rem",color:e.color,fontWeight:800,marginTop:1}}>→ {e.value}</div>
-                  {e.note&&<div style={{fontSize:"0.58rem",color:"#475569",marginTop:2,fontStyle:"italic"}}>{e.note}</div>}
-                  <div style={{fontSize:"0.58rem",color:"#334155",marginTop:2}}>{e.actor} · {relTime(e.timestamp)}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-// ✅ AUTH SCREEN (Supabase ilə)
+// ============================================================
+// AUTH SCREEN
+// ============================================================
 function AuthScreen({ onLogin, onRegister }) {
   const [mode, setMode] = useState("login");
   const [username, setUsername] = useState("");
@@ -664,15 +978,14 @@ function AuthScreen({ onLogin, onRegister }) {
   const [loading, setLoading] = useState(false);
 
   const groupedAreas = [
-    { label:"RAYONLAR", options: SERVICE_AREAS["Rayonlar"].map(v=>({value:v,label:v,colorDot:"#3b82f6"})) },
-    { label:"STANSIYALAR", options: SERVICE_AREAS["Stansiyalar"].map(v=>({value:v,label:v,colorDot:"#10b981"})) }
+    { label:"RAYONLAR",   options: SERVICE_AREAS["Rayonlar"].map(v=>({value:v,label:v,colorDot:"#3b82f6"})) },
+    { label:"STANSIYALAR",options: SERVICE_AREAS["Stansiyalar"].map(v=>({value:v,label:v,colorDot:"#10b981"})) }
   ];
   const roleOpts = ROLES_DEF.filter(r=>r.id!=="admin"&&r.id!=="vice_admin").map(r=>({value:r.id,label:r.label,colorDot:r.color,sub:r.desc}));
   const inp = {width:"100%",boxSizing:"border-box",background:"linear-gradient(135deg,rgba(6,12,28,0.95),rgba(4,8,20,0.98))",border:"1px solid rgba(56,189,248,0.18)",borderRadius:9,padding:"9px 12px",color:"#e2e8f0",fontSize:"0.76rem",fontFamily:"inherit",outline:"none"};
 
   const submit = async () => {
-    setError("");
-    setLoading(true);
+    setError(""); setLoading(true);
     if (mode==="login") {
       const res = await onLogin(username, password);
       if (!res.ok) setError(res.msg);
@@ -700,9 +1013,7 @@ function AuthScreen({ onLogin, onRegister }) {
     <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#020610,#030915)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Inter',system-ui,sans-serif"}}>
       <div style={{width:420,background:"linear-gradient(135deg,rgba(6,12,28,0.9),rgba(4,8,20,0.95))",border:"1px solid rgba(56,189,248,0.15)",borderRadius:18,padding:36,backdropFilter:"blur(20px)"}}>
         <div style={{textAlign:"center",marginBottom:28}}>
-          <div style={{width:52,height:52,borderRadius:14,background:"linear-gradient(135deg,rgba(56,189,248,0.2),rgba(14,165,233,0.1))",border:"1px solid rgba(56,189,248,0.3)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}>
-            <Zap size={26} style={{color:"#38bdf8"}}/>
-          </div>
+          <div style={{width:52,height:52,borderRadius:14,background:"linear-gradient(135deg,rgba(56,189,248,0.2),rgba(14,165,233,0.1))",border:"1px solid rgba(56,189,248,0.3)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}><Zap size={26} style={{color:"#38bdf8"}}/></div>
           <h1 style={{color:"#f1f5f9",fontSize:"1.1rem",fontWeight:900,marginBottom:4}}>Naxçıvan Enerji İdarəetmə Sistemi</h1>
           <p style={{color:"#334155",fontSize:"0.7rem"}}>{mode==="login"?"Hesabınıza daxil olun":"Yeni hesab tələb edin"}</p>
         </div>
@@ -725,7 +1036,7 @@ function AuthScreen({ onLogin, onRegister }) {
           </>}
           {error&&<div style={{color:"#ef4444",fontSize:"0.7rem",textAlign:"center",background:"rgba(239,68,68,0.08)",borderRadius:7,padding:"8px 12px"}}>{error}</div>}
           <button onClick={submit} disabled={loading} style={{width:"100%",padding:"11px",borderRadius:10,background:"linear-gradient(135deg,rgba(56,189,248,0.18),rgba(14,165,233,0.1))",border:"1px solid rgba(56,189,248,0.35)",color:"#38bdf8",fontWeight:800,fontSize:"0.8rem",cursor:loading?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:loading?0.6:1}}>
-            {loading ? <RefreshCw size={14} style={{animation:"spin 1s linear infinite"}}/> : mode==="login"?<><LogIn size={14}/>Daxil Ol</>:<><UserPlus size={14}/>Müraciət Et</>}
+            {loading?<RefreshCw size={14} style={{animation:"spin 1s linear infinite"}}/>:mode==="login"?<><LogIn size={14}/>Daxil Ol</>:<><UserPlus size={14}/>Müraciət Et</>}
           </button>
         </div>
       </div>
@@ -733,191 +1044,57 @@ function AuthScreen({ onLogin, onRegister }) {
   );
 }
 
-// ✅ MESSAGING PANEL (Supabase ilə)
-function MessagingPanel({ currentUser, users, messages, onSend, perms }) {
-  const [tab, setTab] = useState("inbox");
-  const [compose, setCompose] = useState(false);
-  const [recipient, setRec] = useState("broadcast");
-  const [subject, setSubj] = useState("");
-  const [body, setBody] = useState("");
-  const [priority, setPri] = useState("normal");
-  const [viewing, setView] = useState(null);
-  const inp = {width:"100%",boxSizing:"border-box",background:"linear-gradient(135deg,rgba(6,12,28,0.95),rgba(4,8,20,0.98))",border:"1px solid rgba(56,189,248,0.18)",borderRadius:9,padding:"9px 12px",color:"#e2e8f0",fontSize:"0.76rem",fontFamily:"inherit",outline:"none"};
-  const myMessages = messages.filter(m=>{
-    if(tab==="inbox") return m.toId===currentUser.id || (m.type==="broadcast"&&m.fromId!==currentUser.id);
-    if(tab==="sent")  return m.fromId===currentUser.id;
-    return false;
-  });
-  const unread = messages.filter(m=>(m.toId===currentUser.id||(m.type==="broadcast"&&m.fromId!==currentUser.id))&&!(m.readBy||[]).includes(currentUser.id)).length;
-  const recipientOpts = [
-    ...(perms.canBroadcast?[{value:"broadcast",label:"📢 Hər Kəs (Broadcast)",colorDot:"#f97316"}]:[]),
-    ...users.filter(u=>u.id!==currentUser.id).map(u=>({value:String(u.id),label:`${u.name}`,sub:ROLES_DEF.find(r=>r.id===u.role)?.label,colorDot:ROLES_DEF.find(r=>r.id===u.role)?.color||"#64748b"}))
-  ];
-  const handleSend = async () => {
-    if (!subject||!body) return;
-    const isBroadcast = recipient==="broadcast";
-    const toUser = isBroadcast?null:users.find(u=>String(u.id)===recipient);
-    
-    // ✅ Supabase-ə əlavə et
-    const { error } = await supabase.from('messages').insert([{
-      from_id: currentUser.id,
-      from_name: currentUser.name,
-      from_avatar: currentUser.avatar,
-      from_role: currentUser.role,
-      to_id: isBroadcast?null:(toUser?.id||null),
-      to_name: isBroadcast?"Hamı":(toUser?.name||""),
-      subject,
-      body,
-      priority,
-      type: isBroadcast?"broadcast":"direct",
-      read_by: [currentUser.id]
-    }]);
-
-    if (error) {
-      console.error("Message send error:", error);
-    } else {
-      setCompose(false); setSubj(""); setBody(""); setRec("broadcast"); setPri("normal");
-    }
-  };
-  
-  if (viewing) {
-    const msg = messages.find(m=>m.id===viewing);
-    if (!msg) { setView(null); return null; }
-    return (
-      <div style={{color:"#94a3b8"}}>
-        <button onClick={()=>setView(null)} style={{display:"flex",alignItems:"center",gap:6,background:"none",border:"none",color:"#38bdf8",cursor:"pointer",fontSize:"0.72rem",marginBottom:16}}><ArrowLeft size={13}/> Geri</button>
-        <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(56,189,248,0.12)",borderRadius:12,padding:20}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
-            <div>
-              <h3 style={{color:"#f1f5f9",fontSize:"0.9rem",fontWeight:800,margin:0}}>{msg.subject}</h3>
-              <div style={{fontSize:"0.65rem",color:"#475569",marginTop:4}}><span style={{color:"#94a3b8"}}>{msg.fromName}</span> → <span style={{color:"#94a3b8"}}>{msg.toName||"Hamı"}</span>{" · "}{relTime(msg.timestamp)}</div>
-            </div>
-            {msg.priority==="high"&&<span style={{fontSize:"0.58rem",color:"#ef4444",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:4,padding:"2px 8px",fontWeight:800}}>TƏCİLİ</span>}
-          </div>
-          <p style={{fontSize:"0.78rem",lineHeight:1.7,color:"#cbd5e1",whiteSpace:"pre-wrap"}}>{msg.body}</p>
-        </div>
-      </div>
-    );
-  }
-  if (compose) return (
-    <div style={{color:"#94a3b8"}}>
-      <button onClick={()=>setCompose(false)} style={{display:"flex",alignItems:"center",gap:6,background:"none",border:"none",color:"#38bdf8",cursor:"pointer",fontSize:"0.72rem",marginBottom:16}}><ArrowLeft size={13}/> Geri</button>
-      <h3 style={{color:"#f1f5f9",fontSize:"0.85rem",fontWeight:800,marginBottom:16}}>Yeni Mesaj</h3>
-      <div style={{display:"flex",flexDirection:"column",gap:12}}>
-        <DarkSelect value={recipient} onChange={setRec} options={recipientOpts} placeholder="Alıcı seçin"/>
-        <input placeholder="Mövzu" value={subject} onChange={e=>setSubj(e.target.value)} style={inp}/>
-        <textarea placeholder="Mesaj mətni..." value={body} onChange={e=>setBody(e.target.value)} rows={6} style={{...inp,resize:"vertical"}}/>
-        <DarkSelect value={priority} onChange={setPri} options={[{value:"normal",label:"Normal",colorDot:"#10b981"},{value:"high",label:"Təcili",colorDot:"#ef4444"}]} placeholder="Prioritet"/>
-        <button onClick={handleSend} style={{padding:"10px",borderRadius:9,background:"linear-gradient(135deg,rgba(56,189,248,0.18),rgba(14,165,233,0.1))",border:"1px solid rgba(56,189,248,0.35)",color:"#38bdf8",fontWeight:800,fontSize:"0.76rem",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Send size={13}/> Göndər</button>
-      </div>
-    </div>
-  );
-  return (
-    <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-        <h3 style={{color:"#f1f5f9",fontSize:"0.85rem",fontWeight:800,margin:0}}>Mesajlar</h3>
-        <button onClick={()=>setCompose(true)} style={{padding:"6px 14px",borderRadius:8,background:"rgba(56,189,248,0.1)",border:"1px solid rgba(56,189,248,0.25)",color:"#38bdf8",fontSize:"0.65rem",fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}><Plus size={11}/> Yeni</button>
-      </div>
-      <div style={{display:"flex",gap:6,marginBottom:14}}>
-        {[{k:"inbox",l:"Gələnlər",Icon:Inbox},{k:"sent",l:"Göndərilənlər",Icon:Send}].map(({k,l,Icon})=>(
-          <button key={k} onClick={()=>setTab(k)} style={{flex:1,padding:"7px",borderRadius:7,border:`1px solid ${tab===k?"rgba(56,189,248,0.35)":"rgba(56,189,248,0.1)"}`,background:tab===k?"rgba(56,189,248,0.1)":"transparent",color:tab===k?"#38bdf8":"#475569",cursor:"pointer",fontSize:"0.65rem",fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
-            <Icon size={11}/>{l}{k==="inbox"&&unread>0&&<span style={{background:"#ef4444",color:"#fff",fontSize:"0.5rem",borderRadius:"50%",width:14,height:14,display:"inline-flex",alignItems:"center",justifyContent:"center",fontWeight:900}}>{unread}</span>}
-          </button>
-        ))}
-      </div>
-      <div style={{display:"flex",flexDirection:"column",gap:6}}>
-        {myMessages.length===0&&<div style={{color:"#334155",fontSize:"0.72rem",textAlign:"center",padding:"20px 0"}}>Mesaj yoxdur</div>}
-        {myMessages.map(msg=>{
-          const isUnread = !(msg.readBy||[]).includes(currentUser.id)&&tab==="inbox";
-          return (
-            <div key={msg.id} onClick={()=>setView(msg.id)} style={{background:isUnread?"rgba(56,189,248,0.06)":"rgba(255,255,255,0.02)",border:`1px solid ${isUnread?"rgba(56,189,248,0.2)":"rgba(56,189,248,0.08)"}`,borderRadius:9,padding:"10px 12px",cursor:"pointer"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
-                <span style={{fontSize:"0.72rem",fontWeight:isUnread?800:600,color:isUnread?"#f1f5f9":"#94a3b8"}}>{msg.subject}</span>
-                <span style={{fontSize:"0.6rem",color:"#334155"}}>{relTime(msg.timestamp)}</span>
-              </div>
-              <div style={{fontSize:"0.62rem",color:"#475569"}}>{tab==="inbox"?msg.fromName:msg.toName||"Hamı"} {msg.type==="broadcast"&&<span style={{color:"#f97316",fontSize:"0.55rem"}}>[Broadcast]</span>}</div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ✅ ANA KOMPONENT
+// ============================================================
+// ANA KOMPONENT
+// ============================================================
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [users, setUsers] = useState([]);
   const [pending, setPending] = useState([]);
-  const [activityLog, setActLog] = useState([]);
-  
-  // ✅ Supabase hooks
-  const { messages, setMessages } = useSupabaseMessages();
-  const { alerts, setAlerts } = useSupabaseAlerts();
-  const { dataEntries, setDataEntries } = useSupabaseDataEntries();
-  const { strategies, setStrategies } = useSupabaseStrategies();
-  
   const [sensorOverrides, setSensorOverrides] = useState({});
-
-  // ✅ Load users və pending
-  useEffect(() => {
-    const loadPending = async () => {
-      const { data, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('status', 'pending');
-      if (!error && data) setPending(data);
-    };
-    loadPending();
-
-    const channel = supabase
-      .channel('pending-users')
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'users' },
-        () => { loadPending(); }
-      )
-      .subscribe();
-
-    return () => supabase.removeChannel(channel);
-  }, []);
-
-  useEffect(() => {
-    const loadUsers = async () => {
-      const { data, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('status', 'approved');
-      if (!error && data) {
-        setUsers((data || []).map(u => ({
-          ...u,
-          name: u.full_name || u.name || u.username,
-          role: normalizeRole(u.role),
-          serviceArea: u.service_region || "Bütün Ərazilər",
-          avatar: (u.full_name || u.name || u.username || "??").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase(),
-          status: u.status || "active"
-        })));
-      }
-    };
-    loadUsers();
-
-    const channel = supabase
-      .channel('approved-users')
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'users' },
-        () => { loadUsers(); }
-      )
-      .subscribe();
-
-    return () => supabase.removeChannel(channel);
-  }, []);
-
   const [activeTab, setTab] = useState("overview");
   const [selNodeIds, setSelNodeIds] = useState([NODES[0].id, NODES[1].id]);
   const [chartHistory, setChartHist] = useState(CONS_HISTORY);
   const [filterSev, setFilterSev] = useState("all");
 
+  // ✅ Mərkəzi mesajlaşma hook — currentUser.id ilə
+  const { messages, loading: msgLoading, markAsRead, sendMessage, deleteMessage } = useSupabaseMessages(currentUser?.id);
+  const { alerts, setAlerts } = useSupabaseAlerts();
+  const { dataEntries, setDataEntries } = useSupabaseDataEntries();
+  const { strategies, setStrategies } = useSupabaseStrategies();
+
   const rawSensors = useSensors();
   const sensors = Object.fromEntries(NODES.map(n => [n.id, { ...rawSensors[n.id], ...(sensorOverrides[n.id]||{}) }]));
+
+  // Users yüklə
+  useEffect(() => {
+    const loadUsers = async () => {
+      const { data } = await supabase.from('users').select('*').eq('status','approved');
+      if (data) setUsers(data.map(u=>({
+        ...u, name:u.full_name||u.name||u.username, role:normalizeRole(u.role),
+        serviceArea:u.service_region||"Bütün Ərazilər",
+        avatar:(u.full_name||u.name||u.username||"??").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase(),
+        status:u.status||"active"
+      })));
+    };
+    loadUsers();
+    const ch = supabase.channel('approved-users')
+      .on('postgres_changes',{event:'*',schema:'public',table:'users'},()=>loadUsers())
+      .subscribe();
+    return ()=>supabase.removeChannel(ch);
+  }, []);
+
+  useEffect(() => {
+    const loadPending = async () => {
+      const { data } = await supabase.from('users').select('*').eq('status','pending');
+      if (data) setPending(data);
+    };
+    loadPending();
+    const ch = supabase.channel('pending-users')
+      .on('postgres_changes',{event:'*',schema:'public',table:'users'},()=>loadPending())
+      .subscribe();
+    return ()=>supabase.removeChannel(ch);
+  }, []);
 
   useEffect(() => {
     const iv = setInterval(() => {
@@ -925,101 +1102,61 @@ export default function App() {
       const label = `${now.getHours().toString().padStart(2,"0")}:${now.getMinutes().toString().padStart(2,"0")}`;
       const totalOutput = ENERGY_SOURCES.reduce((s,e)=>s+e.cur,0);
       const noise = (Math.random()-0.5)*4;
-      setChartHist(prev => [...prev.slice(-23), { t:label, i:+(totalOutput+noise).toFixed(1), p:+(totalOutput-1+noise).toFixed(1) }]);
+      setChartHist(prev=>[...prev.slice(-23),{t:label,i:+(totalOutput+noise).toFixed(1),p:+(totalOutput-1+noise).toFixed(1)}]);
     }, 8000);
-    return () => clearInterval(iv);
+    return ()=>clearInterval(iv);
   }, []);
 
   const handleLogin = async (username, password) => {
-    if (!username || !password) return { ok:false, msg:"İstifadəçi adı və şifrəni daxil edin." };
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('username', username)
-      .eq('password', password)
-      .single();
-    if (error || !data) return { ok:false, msg:"İstifadəçi adı və ya şifrə yanlışdır." };
-    if (data.status === 'pending') return { ok:false, msg:"Hesabınız hələ təsdiqlənməyib. Administrator ilə əlaqə saxlayın." };
-    if (data.status === 'rejected') return { ok:false, msg:"Hesab müraciətiniz rədd edilib." };
-    if (data.status === 'blocked') return { ok:false, msg:"Hesabınız bloklanıb. Administrator ilə əlaqə saxlayın." };
+    if (!username||!password) return {ok:false,msg:"İstifadəçi adı və şifrəni daxil edin."};
+    const {data,error} = await supabase.from('users').select('*').eq('username',username).eq('password',password).single();
+    if (error||!data) return {ok:false,msg:"İstifadəçi adı və ya şifrə yanlışdır."};
+    if (data.status==='pending') return {ok:false,msg:"Hesabınız hələ təsdiqlənməyib."};
+    if (data.status==='rejected') return {ok:false,msg:"Hesab müraciətiniz rədd edilib."};
+    if (data.status==='blocked') return {ok:false,msg:"Hesabınız bloklanıb."};
     const normalizedRole = normalizeRole(data.role);
-    const userName = data.full_name || data.name || data.username;
+    const userName = data.full_name||data.name||data.username;
     setCurrentUser({
-      ...data,
-      id: data.id,
-      name: userName,
-      role: normalizedRole,
-      serviceArea: data.service_region || "Bütün Ərazilər",
-      avatar: userName.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()
+      ...data, id:data.id, name:userName, role:normalizedRole,
+      serviceArea:data.service_region||"Bütün Ərazilər",
+      avatar:userName.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()
     });
-    return { ok:true };
+    return {ok:true};
   };
 
   const handleRegister = async (formData) => {
     try {
-      const { data: existing } = await supabase.from('users').select('id').eq('username', formData.username).maybeSingle();
-      if (existing) return { error: "Bu istifadəçi adı artıq mövcuddur." };
-      const { data: existingEmail } = await supabase.from('users').select('id').eq('email', formData.email).maybeSingle();
-      if (existingEmail) return { error: "Bu e-poçt artıq qeydiyyatdadır." };
-      const insertData = {
-        username:       formData.username,
-        password:       formData.password,
-        full_name:      formData.name,
-        email:          formData.email,
-        role:           formData.requestedRole || 'viewer',
-        status:         'pending',
-        service_region: formData.serviceArea,
-        note:           formData.note || ""
-      };
-      const { data, error } = await supabase.from('users').insert([insertData]).select();
-      if (error) return { error: `Xəta: ${error.message}` };
-      return { ok: true };
-    } catch (err) {
-      return { error: "Gözlənilməz xəta baş verdi." };
-    }
+      const {data:existing} = await supabase.from('users').select('id').eq('username',formData.username).maybeSingle();
+      if (existing) return {error:"Bu istifadəçi adı artıq mövcuddur."};
+      const {error} = await supabase.from('users').insert([{
+        username:formData.username, password:formData.password, full_name:formData.name,
+        email:formData.email, role:formData.requestedRole||'viewer', status:'pending',
+        service_region:formData.serviceArea, note:formData.note||""
+      }]).select();
+      if (error) return {error:`Xəta: ${error.message}`};
+      return {ok:true};
+    } catch(err) { return {error:"Gözlənilməz xəta baş verdi."}; }
   };
 
   const handleLogout = () => { setCurrentUser(null); setTab("overview"); };
-  const addAlert = async (a) => {
-    const { error } = await supabase.from('alerts').insert([{
-      station_name: a.node,
-      component: a.component,
-      severity: a.severity,
-      message: a.message,
-      note: a.note
-    }]);
-    if (error) console.error("Alert insert error:", error);
-  };
+
   const removeAlert = async (id) => {
-    await supabase.from('alerts').delete().eq('id', id);
+    await supabase.from('alerts').delete().eq('id',id);
+    setAlerts(prev=>prev.filter(a=>a.id!==id));
   };
 
-  const saveStrategy = async (s) => {
-    const { error } = await supabase.from('strategies').insert([{
-      title: s.title,
-      category: s.category,
-      category_color: s.categoryColor || "#3b82f6",
-      description: s.desc,
-      roi: s.roi,
-      duration: s.duration,
-      annual_savings: s.annualSavings || "",
-      impact: s.impact || "",
-      priority: s.priority || "Orta",
-      priority_color: s.priorityColor || "#f59e0b",
-      status: s.status || "Planlaşdırılıb",
-      status_color: s.statusColor || "#f59e0b",
-      energy_saved: s.energySaved || "",
-      co2_reduction: s.co2Reduction || "",
-      progress: s.progress || 0,
-      completed: s.completed || false
-    }]);
-    if (error) console.error("Strategy insert error:", error);
-  };
+  const toggleNode = (id) => setSelNodeIds(prev=>prev.includes(id)?(prev.length>1?prev.filter(x=>x!==id):prev):[...prev,id]);
 
-  const toggleNode = (id) => setSelNodeIds(prev => prev.includes(id) ? (prev.length>1?prev.filter(x=>x!==id):prev) : [...prev, id]);
+  const filteredAlerts = alerts.filter(a=>filterSev==="all"||a.severity===filterSev);
 
-  const filteredAlerts = alerts.filter(a => filterSev==="all"||a.severity===filterSev);
-  const unreadMsgs = currentUser ? messages.filter(m=>(m.toId===currentUser.id||(m.type==="broadcast"&&m.fromId!==currentUser.id))&&!(m.readBy||[]).includes(currentUser.id)).length : 0;
+  // ✅ Unread count — hook-dan alınır
+  const unreadMsgs = currentUser
+    ? messages.filter(m =>
+        (m.toId === currentUser.id || (m.type==="broadcast" && m.fromId!==currentUser.id)) &&
+        !m.readBy.includes(currentUser.id)
+      ).length
+    : 0;
+
   const perms = getPerms(currentUser);
 
   if (!currentUser) return <AuthScreen onLogin={handleLogin} onRegister={handleRegister}/>;
@@ -1032,13 +1169,13 @@ export default function App() {
     { k:"strategies", l:"Strategiyalar",  Icon:Leaf },
     { k:"incidents",  l:"Hadisələr",      Icon:AlertTriangle },
     { k:"messages",   l:"Mesajlar",       Icon:MessageSquare, badge:unreadMsgs },
-    ...(perms.canSeeAdminTab?[{ k:"admin", l:"Admin", Icon:Crown, badge:pending.length }]:[])
+    ...(perms.canSeeAdminTab?[{k:"admin",l:"Admin",Icon:Crown,badge:pending.length}]:[])
   ];
 
   const card = (extra={}) => ({
     background:"linear-gradient(135deg,rgba(6,12,28,0.9),rgba(4,8,20,0.95))",
-    border:"1px solid rgba(56,189,248,0.12)",
-    borderRadius:14,padding:18,backdropFilter:"blur(10px)",...extra
+    border:"1px solid rgba(56,189,248,0.12)",borderRadius:14,padding:18,
+    backdropFilter:"blur(10px)",...extra
   });
 
   const totalOutput = ENERGY_SOURCES.reduce((s,e)=>s+e.cur,0);
@@ -1057,7 +1194,7 @@ export default function App() {
         @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
       `}</style>
 
-      {/* HEADER VA TAB NAVIGATION */}
+      {/* HEADER */}
       <header style={{background:"linear-gradient(90deg,rgba(2,6,16,0.95),rgba(4,8,22,0.95))",borderBottom:"1px solid rgba(56,189,248,0.1)",padding:"12px 20px",display:"flex",alignItems:"center",gap:16,position:"sticky",top:0,zIndex:100,backdropFilter:"blur(20px)"}}>
         <div style={{display:"flex",alignItems:"center",gap:10,flex:1,minWidth:0}}>
           <div style={{width:36,height:36,borderRadius:10,background:"linear-gradient(135deg,rgba(56,189,248,0.2),rgba(14,165,233,0.1))",border:"1px solid rgba(56,189,248,0.3)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
@@ -1085,6 +1222,7 @@ export default function App() {
         </div>
       </header>
 
+      {/* NAV */}
       <nav style={{background:"linear-gradient(90deg,rgba(2,6,14,0.9),rgba(3,8,20,0.9))",borderBottom:"1px solid rgba(56,189,248,0.08)",padding:"0 20px",display:"flex",gap:2,overflowX:"auto"}}>
         {TABS.map(({k,l,Icon,badge})=>(
           <button key={k} onClick={()=>setTab(k)} style={{padding:"10px 14px",border:"none",borderBottom:`2px solid ${activeTab===k?"#38bdf8":"transparent"}`,background:"transparent",color:activeTab===k?"#38bdf8":"#475569",cursor:"pointer",fontSize:"0.68rem",fontWeight:700,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6,transition:"all 0.2s",position:"relative"}}>
@@ -1095,15 +1233,16 @@ export default function App() {
       </nav>
 
       <main style={{padding:20,maxWidth:1400,margin:"0 auto"}}>
-        {/* OVERVIEW TAB */}
+
+        {/* OVERVIEW */}
         {activeTab==="overview"&&(
           <div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:14,marginBottom:20}}>
               {[
-                { label:"Ümumi İstehsal",   value:`${totalOutput.toFixed(1)} MW`,   sub:`Gücün ${gridEfficiency}%-i`,         color:"#38bdf8", Icon:Zap },
-                { label:"Sistem Gücü",      value:`${totalCapacity} MW`,             sub:`${ENERGY_SOURCES.length} mənbə`,    color:"#10b981", Icon:Battery },
-                { label:"Şəbəkə Fəallığı", value:`${gridEfficiency}%`,              sub:"Real vaxt",                         color:"#eab308", Icon:TrendingUp },
-                { label:"Aktiv Hadisələr",  value:filteredAlerts.filter(a=>a.severity==="yüksək").length, sub:`${filteredAlerts.length} ümumilikdə`, color:"#ef4444", Icon:AlertTriangle },
+                {label:"Ümumi İstehsal",value:`${totalOutput.toFixed(1)} MW`,sub:`Gücün ${gridEfficiency}%-i`,color:"#38bdf8",Icon:Zap},
+                {label:"Sistem Gücü",value:`${totalCapacity} MW`,sub:`${ENERGY_SOURCES.length} mənbə`,color:"#10b981",Icon:Battery},
+                {label:"Şəbəkə Fəallığı",value:`${gridEfficiency}%`,sub:"Real vaxt",color:"#eab308",Icon:TrendingUp},
+                {label:"Aktiv Hadisələr",value:filteredAlerts.filter(a=>a.severity==="yüksək").length,sub:`${filteredAlerts.length} ümumilikdə`,color:"#ef4444",Icon:AlertTriangle},
               ].map(({label,value,sub,color,Icon})=>(
                 <div key={label} style={{...card(),display:"flex",gap:14,alignItems:"flex-start"}}>
                   <div style={{width:42,height:42,borderRadius:12,background:`${color}15`,border:`1px solid ${color}30`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Icon size={20} style={{color}}/></div>
@@ -1115,17 +1254,9 @@ export default function App() {
                 </div>
               ))}
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:14,marginBottom:14}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:14}}>
               <div style={card()}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                  <div style={{fontSize:"0.7rem",color:"#64748b",fontWeight:700,letterSpacing:"0.08em"}}>ENERJİ İSTEHSALI / İSTEHLAKI</div>
-                  <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                    <span style={{fontSize:"0.62rem",color:"#334155"}}>Son 24 saat</span>
-                    <div style={{fontSize:"0.58rem",color:"#10b981",background:"rgba(16,185,129,0.1)",border:"1px solid rgba(16,185,129,0.2)",borderRadius:4,padding:"2px 7px",fontWeight:700}}>
-                      ΔMW {((chartHistory[chartHistory.length-1]?.i||0)-(chartHistory[chartHistory.length-2]?.i||0)>0?"+":"")}{((chartHistory[chartHistory.length-1]?.i||0)-(chartHistory[chartHistory.length-2]?.i||0)).toFixed(1)}
-                    </div>
-                  </div>
-                </div>
+                <div style={{fontSize:"0.7rem",color:"#64748b",fontWeight:700,marginBottom:4}}>ENERJİ İSTEHSALI / İSTEHLAKI</div>
                 <EnergyChart data={chartHistory}/>
               </div>
               <div style={card()}>
@@ -1143,13 +1274,13 @@ export default function App() {
           </div>
         )}
 
-        {/* STATIONS TAB */}
+        {/* STATIONS */}
         {activeTab==="stations"&&(
           <div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
               {NODES.map(n=>{
-                const sel = selNodeIds.includes(n.id);
-                return (
+                const sel=selNodeIds.includes(n.id);
+                return(
                   <button key={n.id} onClick={()=>toggleNode(n.id)} style={{padding:"7px 14px",borderRadius:9,border:`1px solid ${sel?n.color+"60":n.color+"20"}`,background:sel?`${n.color}15`:"transparent",color:sel?n.color:"#475569",cursor:"pointer",fontSize:"0.65rem",fontWeight:sel?700:500,display:"flex",alignItems:"center",gap:6,transition:"all 0.2s"}}>
                     <n.icon size={12}/>{n.label.split(" ").slice(0,2).join(" ")}
                   </button>
@@ -1158,11 +1289,11 @@ export default function App() {
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:14}}>
               {NODES.filter(n=>selNodeIds.includes(n.id)).map(n=>{
-                const s = sensors[n.id]||{};
-                return (
+                const s=sensors[n.id]||{};
+                return(
                   <div key={n.id} style={{...card(),borderColor:`${n.color}25`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
-                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
                         <div style={{width:32,height:32,borderRadius:9,background:`${n.color}15`,border:`1px solid ${n.color}30`,display:"flex",alignItems:"center",justifyContent:"center"}}><n.icon size={16} style={{color:n.color}}/></div>
                         <div>
                           <div style={{fontSize:"0.75rem",fontWeight:800,color:"#f1f5f9",lineHeight:1.2}}>{n.label}</div>
@@ -1173,10 +1304,10 @@ export default function App() {
                     </div>
                     <div style={{display:"flex",flexDirection:"column",gap:8}}>
                       {Object.entries(s).map(([k,v])=>{
-                        const labels = {boilerTemp:"Qazan Temp",steamPressure:"Buxar Təzyiqi",output:"Çıxış Gücü",waterLevel:"Su Səviyyəsi",turbineRpm:"Türbin RPM",panelTemp:"Panel Temp",efficiency:"Səmərəlilik",rpm:"Fırlanma",bearingTemp:"Yataq Temp",vibration:"Vibrasiya"};
-                        const units  = {boilerTemp:"°C",steamPressure:"MPa",output:"MW",waterLevel:"m",turbineRpm:"RPM",panelTemp:"°C",efficiency:"%",rpm:"RPM",bearingTemp:"°C",vibration:"mm/s"};
-                        const isOverridden = sensorOverrides[n.id]?.[k] !== undefined;
-                        return (
+                        const labels={boilerTemp:"Qazan Temp",steamPressure:"Buxar Təzyiqi",output:"Çıxış Gücü",waterLevel:"Su Səviyyəsi",turbineRpm:"Türbin RPM",panelTemp:"Panel Temp",efficiency:"Səmərəlilik",rpm:"Fırlanma",bearingTemp:"Yataq Temp",vibration:"Vibrasiya"};
+                        const units={boilerTemp:"°C",steamPressure:"MPa",output:"MW",waterLevel:"m",turbineRpm:"RPM",panelTemp:"°C",efficiency:"%",rpm:"RPM",bearingTemp:"°C",vibration:"mm/s"};
+                        const isOverridden=sensorOverrides[n.id]?.[k]!==undefined;
+                        return(
                           <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid rgba(255,255,255,0.03)",paddingBottom:6}}>
                             <span style={{fontSize:"0.65rem",color:"#64748b",display:"flex",alignItems:"center",gap:4}}>
                               {labels[k]||k}
@@ -1194,7 +1325,7 @@ export default function App() {
           </div>
         )}
 
-        {/* DATAENTRY TAB */}
+        {/* DATA ENTRY */}
         {activeTab==="dataentry"&&(
           <div style={{display:"grid",gridTemplateColumns:"380px 1fr",gap:14}}>
             <div style={card()}>
@@ -1202,7 +1333,7 @@ export default function App() {
             </div>
             <div style={card()}>
               <div style={{fontSize:"0.7rem",color:"#64748b",fontWeight:700,marginBottom:14,display:"flex",alignItems:"center",gap:6}}><Database size={13}/> MƏLUMAT GİRİŞ TARİXÇƏSİ</div>
-              {dataEntries.length===0 ? (
+              {dataEntries.length===0?(
                 <div style={{textAlign:"center",padding:"32px 0",color:"#334155",fontSize:"0.72rem"}}>Hələ heç bir məlumat daxil edilməyib</div>
               ):(
                 <div style={{display:"flex",flexDirection:"column",gap:6}}>
@@ -1228,7 +1359,7 @@ export default function App() {
           </div>
         )}
 
-        {/* INCIDENTS TAB */}
+        {/* INCIDENTS */}
         {activeTab==="incidents"&&(
           <div>
             <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
@@ -1242,8 +1373,8 @@ export default function App() {
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {filteredAlerts.length===0&&<div style={{...card(),textAlign:"center",padding:40,color:"#334155"}}>Hadisə tapılmadı</div>}
               {filteredAlerts.map(a=>{
-                const sv = SEVERITY_MAP[a.severity]||SEVERITY_MAP["aşağı"];
-                return (
+                const sv=SEVERITY_MAP[a.severity]||SEVERITY_MAP["aşağı"];
+                return(
                   <div key={a.id} style={{...card(),borderColor:sv.border,background:`linear-gradient(135deg,${sv.bg},rgba(4,8,20,0.97))`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
                       <div style={{flex:1,minWidth:0}}>
@@ -1267,12 +1398,22 @@ export default function App() {
           </div>
         )}
 
-        {/* MESSAGES TAB */}
+        {/* ✅ MESSAGES — hook prop-ları birbaşa ötürülür */}
         {activeTab==="messages"&&(
           <div style={card()}>
-            <MessagingPanel currentUser={currentUser} users={users} messages={messages} onSend={() => {}} perms={perms}/>
+            <MessagingPanel
+              currentUser={currentUser}
+              users={users}
+              messages={messages}
+              loading={msgLoading}
+              markAsRead={markAsRead}
+              sendMessage={sendMessage}
+              deleteMessage={deleteMessage}
+              perms={perms}
+            />
           </div>
         )}
+
       </main>
     </div>
   );
